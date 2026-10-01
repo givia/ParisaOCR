@@ -1,0 +1,17 @@
+ParisaOCR
+Copyright 2026 Ali Javadi
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+It includes:
+
+- parisaocr/models/ppocrv6-det-small.onnx: the PP-OCRv6 small text detection
+  model of PaddleOCR (https://github.com/PaddlePaddle/PaddleOCR), Copyright
+  PaddlePaddle Authors, licensed under the Apache License, Version 2.0, in the
+  ONNX conversion distributed by RapidOCR (https://github.com/RapidAI/RapidOCR),
+  also under the Apache License, Version 2.0.
+
+- parisaocr/models/parisaocr-fa-0.1.safetensors: a text recognition model
+  trained with Kraken (https://github.com/mittagessen/kraken, Apache License,
+  Version 2.0). See MODEL_CARD.md for its training data, including synthetic
+  lines rendered from Persian and English Wikipedia text (CC BY-SA 4.0).

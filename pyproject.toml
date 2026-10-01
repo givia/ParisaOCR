@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "parisaocr"
+version = "0.1.0"
+description = "Open-source OCR for printed Persian: PP-OCR line detection and a Kraken recognizer trained on Persian books"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+requires-python = ">=3.10,<3.14"
+authors = [{ name = "Ali Javadi" }]
+keywords = ["ocr", "persian", "farsi", "text recognition", "kraken", "rtl"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Natural Language :: Persian",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+    "Topic :: Text Processing :: Linguistic",
+]
+dependencies = [
+    "pillow",
+    "numpy",
+    "rapidocr>=3.9",
+    "onnxruntime",
+    "kraken==7.1.1",  # pinned: parisaocr/kraken_reader.py works around two 7.1.1 issues (mittagessen/kraken#809, #810)
+]
+
+[project.optional-dependencies]
+surya = ["surya-ocr"]  # the earlier detector; its weights are free only for research, personal use and small companies
+
+[project.urls]
+Homepage = "https://github.com/givia/ParisaOCR"
+Issues = "https://github.com/givia/ParisaOCR/issues"
+
+[project.scripts]
+parisaocr = "parisaocr.cli:main"
+
+[tool.setuptools]
+packages = ["parisaocr"]
+
+[tool.setuptools.package-data]
+parisaocr = ["models/*.safetensors", "models/*.onnx"]

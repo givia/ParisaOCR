@@ -1,0 +1,19 @@
+name: Error or crash
+description: ParisaOCR fails, crashes or will not install
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command you ran and the full error message.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      placeholder: parisaocr 0.1.0, Python 3.12, Ubuntu 24.04, CPU only
+    validations:
+      required: true

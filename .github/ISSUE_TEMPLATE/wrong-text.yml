@@ -1,0 +1,36 @@
+name: Wrong or missing text
+description: A page that ParisaOCR reads badly
+labels: ["accuracy"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you. Please only attach pages you are allowed to share publicly.
+        لطفاً فقط صفحه‌هایی را پیوست کنید که اجازهٔ انتشار عمومی‌شان را دارید.
+  - type: textarea
+    id: page
+    attributes:
+      label: The page (or a crop of the problem area)
+      description: Drag the image here. A crop is enough if the whole page cannot be shared.
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command or code you ran
+      render: shell
+      placeholder: parisaocr ocr page.png
+    validations:
+      required: true
+  - type: textarea
+    id: wrong
+    attributes:
+      label: What came out wrong
+      description: Paste the wrong lines and, if you can, what the page actually says.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      placeholder: parisaocr --version
