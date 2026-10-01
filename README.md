@@ -1,4 +1,4 @@
-# ParisaOCR
+# ParisaOCR (پریسا اوسی‌آر)
 
 Open-source OCR for printed Persian. It reads scanned book pages about as well
 as Google's Gemini Flash models, runs on your own machine (CPU or GPU, no
@@ -128,7 +128,7 @@ is PaddleOCR's (Apache-2.0); see [NOTICE](NOTICE).
 
 ## فارسی
 
-پاریسا او‌سی‌آر یک او‌سی‌آر متن‌باز برای متن چاپی فارسی است. صفحه‌های اسکن‌شدهٔ کتاب را
+پریسا اوسی‌آر یک اوسی‌آر متن‌باز برای متن چاپی فارسی است. صفحه‌های اسکن‌شدهٔ کتاب را
 تقریباً هم‌اندازهٔ مدل‌های Gemini Flash گوگل می‌خواند، روی رایانهٔ خودتان اجرا می‌شود
 (بدون نیاز به اینترنت، با CPU یا GPU) و هزینهٔ اجرایش برای هر هزار صفحه چند سنت است.
 
