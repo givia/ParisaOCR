@@ -38,6 +38,7 @@ surya = ["surya-ocr"]  # the earlier detector; its weights are free only for res
 [project.urls]
 Homepage = "https://github.com/givia/ParisaOCR"
 Issues = "https://github.com/givia/ParisaOCR/issues"
+Model = "https://huggingface.co/givia/ParisaOCR"
 
 [project.scripts]
 parisaocr = "parisaocr.cli:main"

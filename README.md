@@ -8,7 +8,7 @@ internet needed), and costs a few cents per thousand pages to run.
 documents; see [Known limitations](#known-limitations). Feedback with example
 pages is very welcome.
 
-[فارسی](#فارسی)
+[فارسی](#فارسی) · [Model on Hugging Face](https://huggingface.co/givia/ParisaOCR) · [PyPI](https://pypi.org/project/parisaocr/)
 
 ## Install
 
