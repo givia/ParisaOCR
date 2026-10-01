@@ -4,7 +4,7 @@ Open-source OCR for printed Persian. It reads scanned book pages about as well
 as Google's Gemini Flash models, runs on your own machine (CPU or GPU, no
 internet needed), and costs a few cents per thousand pages to run.
 
-**Status: preview (0.1).** It works well on printed Persian books and
+**Status: preview.** It works well on printed Persian books and
 documents; see [Known limitations](#known-limitations). Feedback with example
 pages is very welcome.
 
@@ -154,7 +154,7 @@ is PaddleOCR's (Apache-2.0); see [NOTICE](NOTICE).
 تقریباً هم‌اندازهٔ مدل‌های Gemini Flash گوگل می‌خواند، روی رایانهٔ خودتان اجرا می‌شود
 (بدون نیاز به اینترنت، با CPU یا GPU) و هزینهٔ اجرایش برای هر هزار صفحه چند سنت است.
 
-**وضعیت: پیش‌نمایش (۰٫۱).** روی کتاب‌ها و اسناد چاپی فارسی خوب کار می‌کند. محدودیت‌ها
+**وضعیت: پیش‌نمایش.** روی کتاب‌ها و اسناد چاپی فارسی خوب کار می‌کند. محدودیت‌ها
 را پایین‌تر ببینید. بازخورد همراه با صفحهٔ نمونه بسیار ارزشمند است.
 
 نصب:
