@@ -84,17 +84,23 @@ def cmd_ocr(opts):
     log = (lambda *a, **k: None) if getattr(opts, "quiet", False) else (lambda *a, **k: print(*a, **k, flush=True))
     out = pathlib.Path(opts.out)
     formats = [f.strip() for f in opts.format.split(",") if f.strip()]
-    bad = set(formats) - {"txt", "hocr", "jsonl"}
+    bad = set(formats) - {"txt", "hocr", "jsonl", "pdf"}
     if bad:
         sys.exit(f"parisaocr: unknown format {', '.join(bad)}")
     pages = collect(opts.input, out, opts.pdf, opts.dpi, opts.first, opts.last, opts.redo)
     if not pages:
         sys.exit("parisaocr: no pages to read")
+    want_pdf = "pdf" in formats
+    formats = [f for f in formats if f != "pdf"]
+    if want_pdf and "jsonl" not in formats:
+        formats.append("jsonl")  # the searchable PDF is built from the per-page lines and boxes
     for f in formats:
         (out / f).mkdir(parents=True, exist_ok=True)
     todo = [(pid, p) for pid, p in pages if opts.redo or not all((out / f / f"{pid}.{f}").exists() for f in formats)]
-    log(f"{len(pages)} pages, {len(todo)} to read -> {out}/{{{','.join(formats)}}}")
+    log(f"{len(pages)} pages, {len(todo)} to read -> {out}/{{{','.join(formats + ['pdf'] * want_pdf)}}}")
     if not todo:
+        if want_pdf:
+            write_pdfs(opts, out, pages, log)
         return pages
     detector, reader, options = build_engine(opts)
     started, n_lines, done = time.time(), 0, 0
@@ -129,7 +135,46 @@ def cmd_ocr(opts):
         if pending:
             n_lines += pending.result()
     log(f"{len(todo)} pages, {n_lines} lines in {time.time() - started:.0f} s")
+    if want_pdf:
+        write_pdfs(opts, out, pages, log)
     return pages
+
+
+def write_pdfs(opts, out, pages, log):
+    """Searchable PDFs in OUT/pdf: the input PDF with a text layer, and/or the image inputs as PDFs."""
+    from PIL import Image
+    from . import pdfout
+    (out / "pdf").mkdir(exist_ok=True)
+    pdf_inputs = [pathlib.Path(p) for p in opts.input if pathlib.Path(p).suffix.lower() == ".pdf"]
+    pages_dir = (out / "pages").resolve()
+    from_pdf = [(pid, p) for pid, p in pages if pathlib.Path(p).resolve().parent == pages_dir]
+    images = [(pid, p) for pid, p in pages if (pid, p) not in from_pdf]
+
+    def lines_of(pid):
+        f = out / "jsonl" / f"{pid}.jsonl"
+        return pdfout.read_jsonl(f) if f.exists() else []
+
+    if pdf_inputs and from_pdf:
+        src = pdf_inputs[0]
+        layers = {}
+        for pid, image in from_pdf:
+            with Image.open(image) as im:
+                layers[int(pid.split("-")[1])] = (im.width, im.height, lines_of(pid))
+        dst = out / "pdf" / src.name
+        done = pdfout.overlay_pdf(src, layers, dst, keep_text=opts.pdf_text == "skip")
+        skipped = len(layers) - len(done)
+        log(f"searchable PDF -> {dst} (text layer on {len(done)} pages"
+            + (f"; {skipped} already had text and were left as they are (--pdf-text add to add ours)" if skipped else "")
+            + ")")
+    if images:
+        if opts.merge_pdf:
+            dst = out / "pdf" / (opts.merge_pdf if opts.merge_pdf.lower().endswith(".pdf") else opts.merge_pdf + ".pdf")
+            pdfout.images_to_pdf([(p, lines_of(pid)) for pid, p in images], dst)
+            log(f"searchable PDF -> {dst} ({len(images)} pages)")
+        else:
+            for pid, p in images:
+                pdfout.images_to_pdf([(p, lines_of(pid))], out / "pdf" / f"{pid}.pdf")
+            log(f"searchable PDFs -> {out / 'pdf'} ({len(images)} files)")
 
 
 def cmd_pages(opts):
@@ -160,7 +205,13 @@ def main(argv=None):
                                    "PDF pages are rendered to OUT/pages first; detection is cached in OUT/det.")
     o.add_argument("input", nargs="+")
     o.add_argument("--out", help="output directory; without it the text is printed")
-    o.add_argument("--format", default="txt,hocr", help="comma-separated: txt, hocr, jsonl (with --out)")
+    o.add_argument("--format", default="txt,hocr",
+                   help="comma-separated: txt, hocr, jsonl, pdf (with --out). pdf: searchable PDF, the input PDF with "
+                        "an invisible text layer, or one PDF per input image (see --merge-pdf)")
+    o.add_argument("--merge-pdf", metavar="NAME", help="with --format pdf: put all input images into one PDF, OUT/pdf/NAME.pdf")
+    o.add_argument("--pdf-text", choices=["skip", "add"], default="skip",
+                   help="with --format pdf and a PDF input: leave pages that already have a text layer alone (skip), "
+                        "or add ours to them too (add; e.g. over a poor earlier OCR layer)")
     o.add_argument("--order", choices=["rtl", "raster"], default="rtl", help="line order: right-to-left columns, or top to bottom")
     o.add_argument("--pdf", choices=["auto", "extract", "render"], default="auto",
                    help="PDF pages: extract the embedded scan images, render at --dpi, or decide per file")

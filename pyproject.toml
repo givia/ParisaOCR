@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "parisaocr"
-version = "0.1.0"
+version = "0.2.0"
 description = "Open-source OCR for printed Persian: PP-OCR line detection and a Kraken recognizer trained on Persian books"
 readme = "README.md"
 license = "Apache-2.0"
@@ -28,6 +28,8 @@ dependencies = [
     "rapidocr>=3.9",
     "onnxruntime",
     "kraken==7.1.1",  # pinned: parisaocr/kraken_reader.py works around two 7.1.1 issues (mittagessen/kraken#809, #810)
+    "reportlab",      # searchable PDF: the invisible text layer
+    "pikepdf",        # searchable PDF: laying the text layer over an input PDF
 ]
 
 [project.optional-dependencies]
@@ -44,4 +46,4 @@ parisaocr = "parisaocr.cli:main"
 packages = ["parisaocr"]
 
 [tool.setuptools.package-data]
-parisaocr = ["models/*.safetensors", "models/*.onnx"]
+parisaocr = ["models/*.safetensors", "models/*.onnx", "fonts/*.ttf", "fonts/*.txt"]

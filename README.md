@@ -29,12 +29,34 @@ parisaocr ocr page.png                        # print the text
 parisaocr ocr scans/ --out out                # out/txt/*.txt and out/hocr/*.hocr
 parisaocr ocr book.pdf --out out --format txt,hocr,jsonl
 parisaocr ocr book.pdf --out out --first 10 --last 20
+parisaocr ocr book.pdf --out out --format pdf     # out/pdf/book.pdf: searchable
 ```
 
 Inputs are images, directories of images, or a PDF (scanned pages are
 extracted losslessly, born-digital pages rendered). Outputs: plain text (one
 line per printed line, columns right to left), hOCR with line and word boxes on
 the original page, and JSONL with text, boxes and confidences.
+
+### Searchable PDFs
+
+`--format pdf` writes PDFs you can search, select and copy text in, with the
+page images exactly as they were:
+
+- **PDF input:** `out/pdf/NAME.pdf` is the original file with an invisible text
+  layer over each page that was read. The scans are not re-encoded; page
+  rotation is respected. Pages that already have a text layer (born-digital
+  pages, or scans someone OCRed before) are left as they are; `--pdf-text add`
+  adds ours to them too, e.g. over a poor earlier OCR layer.
+- **Image input:** one PDF per image in `out/pdf/`, or all of them in one file
+  with `--merge-pdf NAME`. The page size follows the image's dpi.
+
+The text layer is stored the way word processors store Persian text (one run
+per line in visual order), so PDF viewers find and copy it in reading order.
+Tested with Poppler (`pdftotext`, used by Okular and Evince) and pdf.js
+(Firefox): words and their order come out right; pdftotext sometimes moves
+punctuation at the edge of a word, and pdf.js drops half-spaces when copying.
+Tools that do not reorder right-to-left text (such as pdfminer) return each
+line reversed, as they do for any Persian PDF.
 
 From Python:
 
@@ -144,9 +166,14 @@ pip install parisaocr
 استفاده:
 
 ```
-parisaocr ocr page.png                 # چاپ متن
-parisaocr ocr book.pdf --out out       # out/txt و out/hocr
+parisaocr ocr page.png                      # چاپ متن
+parisaocr ocr book.pdf --out out            # out/txt و out/hocr
+parisaocr ocr book.pdf --out out --format pdf   # out/pdf/book.pdf: پی‌دی‌اف جست‌وجوپذیر
 ```
+
+با `--format pdf` خروجی یک پی‌دی‌اف جست‌وجوپذیر است: تصویر صفحه‌ها همان است که بود و
+یک لایهٔ متن نامرئی روی آن قرار می‌گیرد، تا بتوانید در آن جست‌وجو کنید و متن را انتخاب
+و کپی کنید.
 
 محدودیت‌ها:
 
