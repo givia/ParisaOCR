@@ -144,6 +144,7 @@ def write_pdfs(opts, out, pages, log):
     """Searchable PDFs in OUT/pdf: the input PDF with a text layer, and/or the image inputs as PDFs."""
     from PIL import Image
     from . import pdfout
+    from .pages import stamp_label
     (out / "pdf").mkdir(exist_ok=True)
     pdf_inputs = [pathlib.Path(p) for p in opts.input if pathlib.Path(p).suffix.lower() == ".pdf"]
     pages_dir = (out / "pages").resolve()
@@ -161,11 +162,17 @@ def write_pdfs(opts, out, pages, log):
             with Image.open(image) as im:
                 layers[int(pid.split("-")[1])] = (im.width, im.height, lines_of(pid))
         dst = out / "pdf" / src.name
-        done = pdfout.overlay_pdf(src, layers, dst, keep_text=opts.pdf_text == "skip")
+        done, replaced, stamped = pdfout.overlay_pdf(src, layers, dst, text=opts.pdf_text)
         skipped = len(layers) - len(done)
-        log(f"searchable PDF -> {dst} (text layer on {len(done)} pages"
-            + (f"; {skipped} already had text and were left as they are (--pdf-text add to add ours)" if skipped else "")
-            + ")")
+        notes = [f"text layer on {len(done)} pages"]
+        if skipped:
+            notes.append(f"{skipped} already had text and were left as they are (--pdf-text add to add ours)")
+        if replaced:
+            notes.append(f"the text layer of {len(replaced)} pages replaced"
+                         + ("" if opts.pdf_text == "replace" else " (glyph codes, not the book's script)"))
+        for s, n in stamped.items():
+            notes.append(f"text stamp {stamp_label(s)} removed from {n} pages")
+        log(f"searchable PDF -> {dst} ({'; '.join(notes)})")
     if images:
         if opts.merge_pdf:
             dst = out / "pdf" / (opts.merge_pdf if opts.merge_pdf.lower().endswith(".pdf") else opts.merge_pdf + ".pdf")
@@ -209,9 +216,11 @@ def main(argv=None):
                    help="comma-separated: txt, hocr, jsonl, pdf (with --out). pdf: searchable PDF, the input PDF with "
                         "an invisible text layer, or one PDF per input image (see --merge-pdf)")
     o.add_argument("--merge-pdf", metavar="NAME", help="with --format pdf: put all input images into one PDF, OUT/pdf/NAME.pdf")
-    o.add_argument("--pdf-text", choices=["skip", "add"], default="skip",
-                   help="with --format pdf and a PDF input: leave pages that already have a text layer alone (skip), "
-                        "or add ours to them too (add; e.g. over a poor earlier OCR layer)")
+    o.add_argument("--pdf-text", choices=["skip", "add", "replace"], default="skip",
+                   help="with --format pdf and a PDF input: leave pages that already have a text layer alone (skip; "
+                        "a layer of glyph codes in another script than the book's is replaced anyway), add ours to "
+                        "them too (add; e.g. over a poor earlier OCR layer), or put ours in place of the text of "
+                        "every scan page (replace)")
     o.add_argument("--order", choices=["rtl", "raster"], default="rtl", help="line order: right-to-left columns, or top to bottom")
     o.add_argument("--pdf", choices=["auto", "extract", "render"], default="auto",
                    help="PDF pages: extract the embedded scan images, render at --dpi, or decide per file")

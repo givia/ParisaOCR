@@ -1,8 +1,10 @@
 """Searchable PDF: the page images with an invisible text layer over the recognized lines.
 
 PDF input: a text layer is laid over each read page of the original file. The
-scans are not touched, page rotation (/Rotate) is respected,
-and pages that already carry text are left as they are.
+scans are not touched, page rotation (/Rotate) is respected, and pages that
+already carry text are left as they are (a text layer of glyph codes, which no
+search can use, is replaced). Text stamped over the scans — a download site's
+name on every page — is removed (parisaocr.pages finds it).
 Image input: a new PDF with the image as the page and the text layer on top.
 
 The text layer looks to a PDF viewer like the text of a Persian document made
@@ -16,6 +18,7 @@ The font is Vazirmatn (SIL Open Font License 1.1, bundled; it covers every
 character the model writes); its glyphs are never drawn, only their Unicode
 mapping is used.
 """
+import collections
 import io
 import json
 import os
@@ -108,12 +111,25 @@ def images_to_pdf(items, out_path):
     c.save()
 
 
-def page_has_text(pdf, number, min_letters=100):
-    """True when page NUMBER (1-based) of PDF already carries a real text layer: a born-digital page or
-    a scan someone has OCRed. A few letters (a watermark, a stamp, a page number) do not count."""
+def page_has_text(pdf, number, min_letters=100, like=None):
+    """What text layer page NUMBER (1-based) of PDF already carries: None for none (a few letters — a
+    stamp, a page number — do not count), "like" for a real one (a born-digital page, a scan someone
+    OCRed) or, given LIKE (our text of the page), "unlike" for one in another script than ours: an OCR
+    layer of glyph codes, which finds nothing and only litters copied text."""
     out = subprocess.run(["pdftotext", "-f", str(number), "-l", str(number), "-q", str(pdf), "-"],
                          capture_output=True, text=True).stdout
-    return sum(c.isalpha() for c in out) >= min_letters
+    theirs = [c for c in out if c.isalpha()]
+    if len(theirs) < min_letters:
+        return None
+    ours = [c for c in (like or "") if c.isalpha()]
+    if len(ours) < 20:
+        return "like"
+    return "like" if abs(_arabic_share(theirs) - _arabic_share(ours)) <= 0.5 else "unlike"
+
+
+def _arabic_share(letters):
+    return sum("؀" <= c <= "ۿ" or "ݐ" <= c <= "ݿ" or "ﭐ" <= c <= "﷿"
+               or "ﹰ" <= c <= "﻿" for c in letters) / len(letters)
 
 
 def _display_to_user(rotate, box):
@@ -125,18 +141,37 @@ def _display_to_user(rotate, box):
             270: (0, -1, 1, 0, x0, y1)}[rotate % 360]
 
 
-def overlay_pdf(src_pdf, pages, out_path, keep_text=True):
+def overlay_pdf(src_pdf, pages, out_path, text="skip"):
     """Copy SRC_PDF to OUT_PATH with an invisible text layer on the given pages.
 
     PAGES: {page number (1-based): (image_w_px, image_h_px, jsonl records)}, where the image is the page's
-    media box as displayed (rotation applied), as parisaocr.pages extracts or renders it. With KEEP_TEXT, pages that already carry text are left alone;
-    otherwise the layer is added to them too (on top of what is there). Returns the numbers of the pages
-    that got a text layer.
+    media box as displayed (rotation applied), as parisaocr.pages extracts or renders it. TEXT says what
+    to do with a text layer a page already carries: "skip" leaves such pages alone, except that a layer in
+    another script than ours (glyph codes from a broken OCR) is replaced; "add" lays ours over whatever is
+    there; "replace" lays ours instead of the text of every scan page (a born-digital page keeps its text).
+    Text stamps (the same string drawn over the scan on most pages: a download site's name) are removed.
+    Returns (pages that got a text layer, pages whose text was replaced, {stamp: pages it was removed from}).
     """
     import pikepdf
+    from .pages import pdf_text_stamps, strip_text
     pdf = pikepdf.open(str(src_pdf))
-    todo = {n: v for n, v in sorted(pages.items())
-            if 1 <= n <= len(pdf.pages) and not (keep_text and page_has_text(src_pdf, n))}
+    info = pdf_text_stamps(pdf)
+    todo, replaced = {}, []
+    for n, v in sorted(pages.items()):
+        if not 1 <= n <= len(pdf.pages):
+            continue
+        has = page_has_text(src_pdf, n, like=" ".join(l.get("text", "") for l in v[2])) if text != "add" else None
+        if text == "skip" and has == "like":
+            continue
+        if info[n]["scan"] and (text == "replace" or has == "unlike") and strip_text(pdf, pdf.pages[n - 1]):
+            replaced.append(n)
+        todo[n] = v
+    stamped = collections.Counter()
+    for n, t in info.items():
+        if t["stamps"]:
+            if n not in replaced:
+                strip_text(pdf, pdf.pages[n - 1], only=set(t["stamps"]))
+            stamped.update(t["stamps"])
     geometry = {}
     for n in todo:
         page = pdf.pages[n - 1]
@@ -160,4 +195,4 @@ def overlay_pdf(src_pdf, pages, out_path, keep_text=True):
         page.contents_add(pikepdf.Stream(pdf, b"q\n"), prepend=True)
         page.contents_add(pikepdf.Stream(pdf, f"\nQ q {a} {b} {c} {d} {e} {f} cm {name} Do Q\n".encode()), prepend=False)
     pdf.save(str(out_path))
-    return list(todo)
+    return list(todo), replaced, dict(stamped)
