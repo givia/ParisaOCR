@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "parisaocr"
-version = "0.2.0"
+version = "0.3.0"
 description = "Open-source OCR for printed Persian: PP-OCR line detection and a Kraken recognizer trained on Persian books"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.10,<3.14"
 authors = [{ name = "Ali Javadi" }]
-keywords = ["ocr", "persian", "farsi", "text recognition", "kraken", "rtl"]
+keywords = ["ocr", "persian", "farsi", "text recognition", "kraken", "rtl", "epub", "searchable pdf"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -30,6 +30,7 @@ dependencies = [
     "kraken==7.1.1",  # pinned: parisaocr/kraken_reader.py works around two 7.1.1 issues (mittagessen/kraken#809, #810)
     "reportlab",      # searchable PDF: the invisible text layer
     "pikepdf",        # searchable PDF: laying the text layer over an input PDF
+    "scipy",          # EPUB: footnote markers found in the page image (also a Kraken dependency)
 ]
 
 [project.optional-dependencies]
@@ -44,7 +45,7 @@ Model = "https://huggingface.co/givia/ParisaOCR"
 parisaocr = "parisaocr.cli:main"
 
 [tool.setuptools]
-packages = ["parisaocr"]
+packages = ["parisaocr", "parisaocr.ebook"]
 
 [tool.setuptools.package-data]
-parisaocr = ["models/*.safetensors", "models/*.onnx", "fonts/*.ttf", "fonts/*.txt"]
+parisaocr = ["models/*.safetensors", "models/*.onnx", "models/roles/*.npz", "fonts/*.ttf", "fonts/*.txt"]

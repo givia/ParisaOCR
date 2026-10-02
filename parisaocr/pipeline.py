@@ -18,6 +18,12 @@ from PIL import Image, ImageDraw, ImageOps
 from .reader import Word, alnum, line_text
 
 
+def _number(text):
+    """Only a number, maybe with leader dots or dashes around it ("۱۲", "...۲", "- ۳ -")."""
+    t = text.strip(" .…-–—()")
+    return bool(t) and all(c.isdigit() for c in t)
+
+
 @dataclass
 class Options:
     pad: int = 6            # least horizontal margin around a box, in working pixels (vertical: half)
@@ -28,7 +34,8 @@ class Options:
     jobs: int = 8
     # Lines of at most 4 characters read with less than this mean confidence are dropped: they
     # come from marks that are not text (a box, a rule end, letters of a sideways running head).
-    # Real short lines (page numbers, "است.") are read with 93-100 by the Kraken model. 0 = keep all.
+    # Real short lines ("است.") are read with 93-100 by the Kraken model; numbers are always kept
+    # (a page number, or "...۲" in a table of contents, a small crop read with less). 0 = keep all.
     short_conf: float = 0.0
 
 
@@ -198,7 +205,7 @@ def recognize_batch(records, reader, opts, tmp):
         crops = per_page[rec["page"]]
         lines = assemble(rec, crops, [results[id(c)] for c in crops])
         if opts.short_conf:
-            lines = [l for l in lines if len(l.text) > 4 or l.conf >= opts.short_conf]
+            lines = [l for l in lines if len(l.text) > 4 or l.conf >= opts.short_conf or _number(l.text)]
         out[rec["page"]] = lines
         for c in crops:
             c.path.unlink(missing_ok=True)

@@ -1,4 +1,4 @@
-"""Command line: `parisaocr ocr` and `parisaocr cut`."""
+"""Command line: `parisaocr ocr`, `parisaocr epub`, `parisaocr pages` and `parisaocr cut`."""
 import argparse
 import os
 import pathlib
@@ -21,6 +21,10 @@ BUNDLED_MODEL = pathlib.Path(__file__).resolve().parent / "models" / "parisaocr-
 DEFAULT_TESSDATA = os.environ.get("PARISAOCR_TESSDATA", str(ROOT / "dist/tessdata_contrib/fas_print/best"))
 DEFAULT_LANG = os.environ.get("PARISAOCR_LANG", "fas_print")
 SMALL_TEXT_PX = 14  # median line height (original page pixels) below which accuracy drops clearly
+
+
+ENGINE_KEYS = ("model", "detector", "min_width", "max_width", "batch", "cpu", "pad", "pad_frac", "min_height",
+               "block_tall", "fallback", "jobs", "redo")
 
 
 def engine_args(p, default_model="default"):
@@ -192,6 +196,21 @@ def cmd_pages(opts):
     print(f"{len(got)} pages in {out}")
 
 
+def cmd_epub(opts):
+    """A scanned book to EPUB: OCR with the engine options given, then `ebook.convert`."""
+    from .ebook.convert import convert
+    defaults = vars(parser().parse_args(["ocr", "-"]))
+
+    def read(inputs, out, formats):
+        o = argparse.Namespace(**defaults)
+        for k in ENGINE_KEYS:
+            setattr(o, k, getattr(opts, k))
+        o.input, o.out, o.format = list(inputs), str(out), formats
+        cmd_ocr(o)
+
+    convert(opts, read)
+
+
 def cmd_cut(opts):
     from .cut import cut
     detector, reader, options = build_engine(opts)
@@ -202,7 +221,7 @@ def cmd_cut(opts):
             test_pages=opts.test_pages, train_pages=opts.train_pages)
 
 
-def main(argv=None):
+def parser():
     ap = argparse.ArgumentParser(prog="parisaocr", description=__doc__)
     ap.add_argument("--version", action="version", version=f"parisaocr {__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -230,6 +249,26 @@ def main(argv=None):
     engine_args(o)
     o.set_defaults(func=cmd_ocr)
 
+    e = sub.add_parser("epub", help="convert a scanned Persian book (PDF) to EPUB 3 (experimental)",
+                       description="Writes OUT/NAME.epub and OUT/NAME.report.md, a report of what the conversion decided "
+                                   "and where it was unsure. The OCR output is kept in OUT/NAME.work, so a second run takes "
+                                   "seconds. Chapters come from the printed contents and the page layout; footnotes become "
+                                   "popup notes; the printed page numbers are kept as the EPUB's page list.")
+    e.add_argument("book", help="the scanned book, one PDF")
+    e.add_argument("--out", required=True, help="output directory")
+    e.add_argument("--name", help="output file name without extension (default: the PDF's)")
+    e.add_argument("--work", help="directory for the OCR output (default OUT/NAME.work)")
+    e.add_argument("--meta", help="JSON file with any of title, subtitle, author, publisher, language, isbn")
+    for k in ("title", "subtitle", "author", "publisher", "language", "isbn"):
+        e.add_argument(f"--{k}", help=f"the book's {k} (overrides --meta)")
+    e.add_argument("--tables", choices=("image", "html"), default="image",
+                   help="tables as images cut from the page (default; OCR of table numbers is not reliable enough) "
+                        "or as HTML tables")
+    e.add_argument("--roles", metavar="DIR",
+                   help="line-role models that help the layout rules (default: the bundled ones; 'none' for the rules alone)")
+    engine_args(e)
+    e.set_defaults(func=cmd_epub)
+
     p = sub.add_parser("pages", help="extract or render a PDF's pages to OUT/p-NNN.png (no OCR)")
     p.add_argument("pdf")
     p.add_argument("--out", required=True)
@@ -256,8 +295,11 @@ def main(argv=None):
     c.add_argument("--crop-pad", type=int, default=10, help="margin of the saved line crops, in page pixels (vertical: half)")
     engine_args(c, default_model=f"{DEFAULT_TESSDATA}:{DEFAULT_LANG}")  # page filters are calibrated on Tesseract confidences
     c.set_defaults(func=cmd_cut)
+    return ap
 
-    opts = ap.parse_args(argv)
+
+def main(argv=None):
+    opts = parser().parse_args(argv)
     opts.func(opts)
 
 

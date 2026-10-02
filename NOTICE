@@ -16,8 +16,9 @@ It includes:
   Version 2.0). See MODEL_CARD.md for its training data, including synthetic
   lines rendered from Persian and English Wikipedia text (CC BY-SA 4.0).
 
-- parisaocr/fonts/Vazirmatn-Regular.ttf: the Vazirmatn font
+- parisaocr/fonts/Vazirmatn-*.ttf: the Vazirmatn font, Regular and Bold
   (https://github.com/rastikerdar/vazirmatn), Copyright 2015 The Vazirmatn
   Project Authors, licensed under the SIL Open Font License 1.1
   (parisaocr/fonts/OFL-Vazirmatn.txt). It is embedded, subset, in the
-  invisible text layer of the searchable PDFs ParisaOCR writes.
+  invisible text layer of the searchable PDFs ParisaOCR writes, and whole in
+  the EPUB books it writes, under the same license.

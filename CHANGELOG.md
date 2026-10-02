@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.3.0 (2026-10-02)
+
+- EPUB 3 from a scanned book, experimental (`parisaocr epub book.pdf --out
+  DIR`): chapters from the printed contents and the page layout, footnotes as
+  popup notes linked to their markers (numbered per page or through the book,
+  or with asterisks), paragraphs joined across pages, block quotes, verse
+  (two hemistichs, and poems set line by line), figures and tables as images,
+  the printed page numbers as the book's page list, pages put in order by
+  their printed numbers (reversed runs, duplicate scans, missing pages). A
+  report lists what was decided and where to check. Embeds Vazirmatn.
+- Chapter openings are decided for the whole book: the contents are aligned
+  with the pages (by title, page number or both), their entries told apart as
+  chapters or sections, and the book's own opening template learned from the
+  confirmed ones. Footnote areas are split by the chain of note numbers
+  (numbering per page, per chapter or through the book; numbers next to an
+  English term or lost by the OCR). Measured on 15 modern books.
+- `parisaocr ocr`: short lines that are only a number (a page number, "...۲"
+  in a table of contents) are kept even when read with less confidence.
+- Learned line roles for the EPUB structure, bundled (`models/roles`, 5 MB):
+  gradient-boosted trees over 46 layout features of each OCR line, trained
+  on 4,018 sampled pages of 85 scanned Persian books whose lines were labelled
+  by Gemini 3.8 Flash (role, footnote, heading, note start, heading level; see
+  MODEL_CARD.md). The layout rules consult them: a footnote area on pages
+  without a separator rule, chapter openings and their title blocks, heading
+  evidence. On eight held-out books, against rules alone: chapters recall
+  57 → 64, footnotes found 44 → 54 (pooled), linked 62 → 76, section headings
+  46 → 63. `--roles DIR` swaps the models, `--roles none` keeps to the rules.
+- Watermarks. A scan placed inside a larger page, or with a site's name typed
+  over it, used to be rendered with the stamp burned in; the page is now drawn
+  from its embedded images where the page places them (lossless, without the
+  stamp), and a stamp found as text repeated over the scans is stripped from
+  any page that still has to be rendered, and from the searchable PDF. A text
+  layer of glyph codes (a broken earlier OCR) is replaced by ours there;
+  `--pdf-text replace` does the same for every scan page. In `parisaocr epub`,
+  a site's name burned into the scans (the same line at the same place in a
+  margin of two or more pages) is left out of the text and whited out in figure
+  crops; the report says so.
+
 ## 0.2.0 (2026-10-01)
 
 - Searchable PDF output (`--format pdf`): the input PDF with an invisible text

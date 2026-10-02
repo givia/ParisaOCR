@@ -99,6 +99,41 @@ noise. The three synthetic line sets are rendered, not scanned.
 - Half-spaces follow standard spelling, which can differ from the print.
 - A label noise floor from the automatic teacher.
 
+## Line-role models (EPUB structure)
+
+`parisaocr epub` also bundles five small models (`parisaocr/models/roles/`,
+3.7 MB) that give each OCR line a role, which the converter's layout rules
+consult when they work out a book's chapters and footnotes.
+
+- **Model.** Gradient-boosted decision trees (scikit-learn
+  HistGradientBoostingClassifier, 300 iterations, 31 leaves; exported as plain
+  node arrays and evaluated with numpy) over 46 features of a line: its box and
+  size relative to the page and the book, position among the page's lines,
+  gaps to its neighbours, text shape (length, digits, Latin letters, a leading
+  number, a label word such as فصل), OCR confidence, how often its text repeats
+  at the top of pages, ink density, printed rules above it, and the small type
+  below it. Tasks: the line role (13 classes: running header, page number,
+  heading, body, quote, verse, footnote, endnote, caption, table, figure,
+  contents, other), footnote or not, heading or not, whether a footnote line
+  starts a note, and the heading level (1-3).
+- **Training data.** 121,222 lines on 4,018 sampled pages of 85 scanned
+  Persian books (the books of the recognizer's collection, OCRed by ParisaOCR;
+  the pages were chosen to include footnotes and chapter openings). The roles
+  were labelled automatically by Google Gemini 3.8 Flash from the page image
+  and the OCR lines; on 518 pages with a human-made structure truth the labels
+  found 97% of chapter openings and footnote lines with precision 92% / recall
+  95%. The pages, lines and labels are not redistributed.
+- **Evaluation.** Through the whole converter on 8 held-out books with a
+  human-made truth (chapters, footnotes, section headings), against the layout
+  rules alone: chapter recall 57% → 64% (precision 60% → 67%), footnotes found
+  44% → 54% (pooled), footnotes linked at their marker 62% → 76%, section
+  headings 46% → 63%. Leave-one-book-out on the 15 development books:
+  footnote-line F1 85%, chapter-opening F1 86%.
+- **Limitations.** Trained on books of the same collection as the recognizer
+  (20th-century and modern print, Persian); titles set in display type that
+  the OCR does not read, and footnotes without a separator rule, remain the
+  main losses.
+
 ## License
 
 Apache License 2.0.

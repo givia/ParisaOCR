@@ -9,6 +9,7 @@ package, so it runs offline, on a CPU or a GPU.
     parisaocr ocr page.png                      # print the text
     parisaocr ocr book.pdf --out out            # out/txt, out/hocr
     parisaocr ocr book.pdf --out out --format pdf   # out/pdf/book.pdf, searchable
+    parisaocr epub book.pdf --out out           # out/book.epub (experimental)
 
     from parisaocr import OCR
     print(OCR().text("page.png"))
@@ -17,7 +18,7 @@ The recognition model and the detector are replaceable (`--model`, `--detector`)
 Tesseract models and the Surya detector are supported for comparison, and
 `parisaocr cut` cuts the lines of scanned books for building training data.
 """
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 
 def __getattr__(name):  # the interface imports torch and Kraken; only load them when asked for

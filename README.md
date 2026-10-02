@@ -30,10 +30,13 @@ parisaocr ocr scans/ --out out                # out/txt/*.txt and out/hocr/*.hoc
 parisaocr ocr book.pdf --out out --format txt,hocr,jsonl
 parisaocr ocr book.pdf --out out --first 10 --last 20
 parisaocr ocr book.pdf --out out --format pdf     # out/pdf/book.pdf: searchable
+parisaocr epub book.pdf --out out                 # out/book.epub (experimental)
 ```
 
 Inputs are images, directories of images, or a PDF (scanned pages are
-extracted losslessly, born-digital pages rendered). Outputs: plain text (one
+extracted losslessly — a scan set inside a larger page, or under a site's name
+typed over it, is drawn from the embedded image where the page places it,
+without the stamp — and born-digital pages rendered). Outputs: plain text (one
 line per printed line, columns right to left), hOCR with line and word boxes on
 the original page, and JSONL with text, boxes and confidences.
 
@@ -46,7 +49,11 @@ page images exactly as they were:
   layer over each page that was read. The scans are not re-encoded; page
   rotation is respected. Pages that already have a text layer (born-digital
   pages, or scans someone OCRed before) are left as they are; `--pdf-text add`
-  adds ours to them too, e.g. over a poor earlier OCR layer.
+  adds ours to them too, e.g. over a poor earlier OCR layer, and `--pdf-text
+  replace` puts ours in place of the text of every scan page. A text layer of
+  glyph codes in another script than the book's (a broken OCR, found in many
+  shared scans) is replaced in any case. A site's name stamped as text over
+  every page is removed, from the page images as well as from this PDF.
 - **Image input:** one PDF per image in `out/pdf/`, or all of them in one file
   with `--merge-pdf NAME`. The page size follows the image's dpi.
 
@@ -57,6 +64,44 @@ Tested with Poppler (`pdftotext`, used by Okular and Evince) and pdf.js
 punctuation at the edge of a word, and pdf.js drops half-spaces when copying.
 Tools that do not reorder right-to-left text (such as pdfminer) return each
 line reversed, as they do for any Persian PDF.
+
+### E-books (EPUB), experimental
+
+```
+parisaocr epub book.pdf --out out --title "…" --author "…"
+```
+
+turns a scanned Persian book into an EPUB 3 e-book, `out/book.epub`, that
+reflows on phones and e-readers. Besides reading the pages, it works out the
+book from the page layout and the printed table of contents, helped by small
+line-role models (gradient-boosted trees over layout features, bundled; see
+[MODEL_CARD.md](MODEL_CARD.md)) — no language model, nothing leaves your
+machine:
+
+- chapters, with their titles and the book's table of contents; section
+  headings, paragraphs joined across pages, block quotes;
+- footnotes as popup notes linked to their markers (numbered per page or
+  through the book, or with asterisks);
+- verse: two-hemistich lines, and poems set line by line with their stanzas;
+- figures and tables as images cut from the page (`--tables html` for HTML
+  tables, but OCR of table numbers is not reliable enough to trust);
+- the printed page numbers as the e-book's page list; pages put in book order
+  by their printed numbers (reversed runs, duplicate scans and missing pages
+  are found and reported).
+
+`out/book.report.md` lists what was decided and where to look first: pages
+read with low confidence, notes whose marker was not found, contents entries
+not found as chapters. The OCR is kept in `out/book.work`, so a second run
+takes seconds. Set `EPUBCHECK_JAR` to an epubcheck jar to have the result
+validated; `--roles none` uses the layout rules without the line-role models.
+
+This is experimental: it was developed on 15 books (novels, a poetry
+anthology, histories with many footnotes, a book exported from Word) and
+measured on 8 others, and will meet layouts it gets wrong. Typical errors: a chapter title with an OCR error
+or cut short, a footnote linked at the end of its page instead of at its
+marker, an unusual heading taken for a paragraph. Multi-column pages
+(magazines) and dictionaries are not supported. Example pages of books it gets
+wrong are very welcome in the issues.
 
 From Python:
 
@@ -174,6 +219,18 @@ parisaocr ocr book.pdf --out out --format pdf   # out/pdf/book.pdf: پی‌دی�
 با `--format pdf` خروجی یک پی‌دی‌اف جست‌وجوپذیر است: تصویر صفحه‌ها همان است که بود و
 یک لایهٔ متن نامرئی روی آن قرار می‌گیرد، تا بتوانید در آن جست‌وجو کنید و متن را انتخاب
 و کپی کنید.
+
+کتاب الکترونیکی (EPUB، آزمایشی):
+
+```
+parisaocr epub book.pdf --out out --title "…" --author "…"
+```
+
+از کتاب اسکن‌شده یک کتاب EPUB می‌سازد که روی گوشی و کتاب‌خوان خوانده می‌شود: فصل‌ها
+و فهرست، پاراگراف‌ها، پانویس‌ها (با پیوند به شمارهٔ پانویس در متن)، شعر، تصویرها و
+جدول‌ها، و شمارهٔ صفحه‌های چاپی. گزارشی هم (`out/book.report.md`) می‌نویسد که نشان
+می‌دهد کجا را باید بررسی کرد. این قابلیت آزمایشی است؛ اگر کتابی درست تبدیل نشد، لطفاً
+در بخش Issues خبر بدهید.
 
 محدودیت‌ها:
 
