@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from . import labels as labels_mod, marks as marks_mod
 from .markers import MARK
 from .notes import split_notes
 from .source import Line
@@ -438,7 +439,9 @@ class Assembler:
         self.explicit = {}
         self.prev_ended = True
         self.report = {"headings": [], "unlinked_notes": [], "stray_markers": [], "toc_unmatched": [], "dropped": [],
-                       "verse": 0, "poem": 0, "tables": 0, "figures": 0, "quotes": 0}
+                       "verse": 0, "poem": 0, "tables": 0, "figures": 0, "quotes": 0, "endnotes": 0, "unlinked_endnotes": 0}
+        self.endnotes = {}  # {unit page: {number: (text, page)}}: endnote lists a page labeller found (`labels.endnotes`)
+        self.unit_notes = {}  # the open unit's endnotes, {number: Note}
 
     # -- output --
     def close_para(self):
@@ -460,8 +463,20 @@ class Assembler:
 
     def new_chapter(self, title, page, kind="chapter", label="", heading=None):
         self.close_para()
+        self.flush_endnotes()
         self.chapter = Chapter(normalize(title), page, label, heading or [], kind=kind)
         self.chapters.append(self.chapter)
+        self.unit_notes = {k: Note(f"e{page}-{k}", p, k, text, ltr=latin_ratio(text) > 0.5)
+                           for k, (text, p) in sorted(self.endnotes.get(page, {}).items())}
+        self.report["endnotes"] += len(self.unit_notes)
+
+    def flush_endnotes(self):
+        """The open unit's endnotes no marker linked: kept after its text, as notes without a reference."""
+        for note in self.unit_notes.values():
+            if not note.linked and self.chapter is not None:
+                self.chapter.notes.append(note)
+                self.report["unlinked_endnotes"] += 1
+        self.unit_notes = {}
 
     # -- inline text and footnote markers --
     def inline(self, text, page_no, ltr=False):
@@ -487,6 +502,9 @@ class Assembler:
                     continue  # an ordinary number in the text
             else:
                 note = notes.get(_marker_num(m))
+                if (note is None or note.linked) and _marker_num(m) in self.unit_notes and not self.unit_notes[_marker_num(m)].linked:
+                    note = self.unit_notes[_marker_num(m)]  # an endnote of the unit
+                    self.chapter.notes.append(note)
                 if note is None or note.linked:
                     # after closing punctuation a digit is a marker, misread ("۲" for "۴")
                     note = following if text[m.start() - 1] in ".»،؛:!؟)" else None
@@ -520,7 +538,7 @@ class Assembler:
     def read_notes(self, L, n):
         """The page's notes, split by `notes.split_notes` (numbers per page, per chapter or through the book)."""
         lines = [l for row in _rows(L.notes) for l in row]
-        lead, found = split_notes(lines, self.max_note, L.width)
+        lead, found = L.label_notes if getattr(L, "label_notes", None) is not None else split_notes(lines, self.max_note, L.width)
         if lead:
             if self.last_note is not None and self.last_note.page >= n - 2:
                 self.last_note.text += " " + " ".join(lead)  # a note continued from the previous page
@@ -567,6 +585,9 @@ class Assembler:
 
     # -- a text page --
     def text_page(self, L, n, lines):
+        for l in lines:  # the note markers a page labeller saw, written into the text where the OCR lost them
+            if getattr(l, "markers", None):
+                l.text, l.markers = labels_mod.marked_text(l), []
         lines = [l for l in sorted(lines, key=lambda l: l.y0) if not (l.h < 0.5 * L.lh and len(l.text) <= 2)]
         cols = _two_columns(L, lines)
         if cols:
@@ -599,6 +620,11 @@ class Assembler:
             ltr = l.latin or latin_ratio(text) > 0.5
             nxt = lines[idx + 1] if idx + 1 < len(lines) else None
             prev_y1 = l.y1
+            role = getattr(l, "label_role", None)
+            if role in ("byline", "epigraph"):  # an author's name under a title, a motto
+                self.add(Block("byline", self.inline(text, n)))
+                prev = None
+                continue
 
             if (re.fullmatch(r"[*٭✽✱\s]+", text) and text.count("*") + text.count("٭") >= 2) or \
                     (l.w < 0.2 * L.width and l.h < 0.7 * L.lh and (l.conf < 85 or "*" in text)):
@@ -607,7 +633,7 @@ class Assembler:
                     self.add(Block("sep"))
                 prev = None
                 continue
-            if l.conf < 80:
+            if l.conf < 80 and role in (None, "other", "figure"):
                 self.report["dropped"].append((n, text))  # stamps, letterheads, handwriting, map labels
                 continue
             if ind > 0.4 and sl < 0.1 and not ltr:
@@ -642,7 +668,9 @@ class Assembler:
                    and len(text) < 100 and not text.endswith(_END_PUNCT) and (ind < 0.07 or _centered(l, W))
                    and len(_letters(text)) >= 3 * sum(c in DIGITS for c in text))  # not a row of figures
             learned_head = getattr(l, "p_head", None) is not None and l.p_head >= 0.5 and l.conf >= 85 and len(text) < 100
-            if not ltr and (geo or learned_head or (score >= 0.6 and sl > 0.05 and (gap is None or gap > 0.5))):
+            label = getattr(l, "label_role", None)  # a page labeller's word decides
+            head = label == "heading" if label is not None else (geo or learned_head or (score >= 0.6 and sl > 0.05 and (gap is None or gap > 0.5)))
+            if not ltr and head:
                 if nxt is not None and nxt.h >= 0.97 * L.lh and (nxt.x0 - L.left) / L.width > 0.3 \
                         and nxt.y0 - l.y1 < 0.6 * L.lh and self.toc_score(text + " " + nxt.text, n) > score + 0.1:
                     text += " " + nxt.text.strip()
@@ -846,6 +874,7 @@ class Assembler:
             self.text_page(L, n, lines)
             self.link_leftovers(n)
         self.close_para()
+        self.flush_endnotes()
 
 
 def _hanging_page(L, lines):
@@ -1257,30 +1286,47 @@ def paragraph_indent(pages):
     return max(bins, key=lambda k: bins[k - 1] + 2 * bins[k] + bins[k + 1]) / 200
 
 
-def build(ordered):
+def build(ordered, marks=None):
+    """The Book of the ordered pages. MARKS, a reviewed marks file (`marks.load`), replaces the openings the
+    rules find with the reader's; the rules' own are kept in the report as "starts", for the review page."""
     pages = list(ordered.pages)
     max_page = max((n for _, n in pages), default=0)
 
     # the printed contents: parsed, then left out of the text
     toc, toc_pages, prev, kind = [], set(), False, "contents"
+    label_toc = labels_mod.contents_pages(pages)
     for k, (L, n) in enumerate(pages):
-        is_toc = is_toc_page(L, prev, early=k < 15)
+        is_toc = n in label_toc if getattr(L, "labelled", False) else is_toc_page(L, prev, early=k < 15)
         if is_toc:
             toc_pages.add(n)
-            entries, kind = parse_toc(L, kind)
-            toc += entries
+            entries = labels_mod.toc_entries(L) if getattr(L, "labelled", False) else []
+            if entries:
+                toc += [TocEntry(title, pg, level) for title, pg, level in entries]
+            else:  # no labels, or labels without the page's entries (a local labeller): the rules read them
+                entries, kind = parse_toc(L, kind)
+                toc += entries
         prev = is_toc
     _fix_toc_numbers(toc, max_page)
     _drop_unordered(toc)
     _number_bare_labels(toc)
     contents = [e for e in toc if e.list == "contents"]
     fig_captions = {e.page: e.title for e in toc if e.list == "figures" and e.page is not None}
-    pages = [(L, n) for L, n in pages if n not in toc_pages]
+    pages = [(L, n) for L, n in pages if n not in toc_pages and getattr(L.page, "label_type", "") != "ad"]
     cover = pages[0] if pages and pages[0][0].kind == "figure" else None
     if cover:
         pages = pages[1:]
 
-    starts = book_openings(pages, contents, chapter_openings(pages, contents))
+    if any(getattr(L, "labelled", False) for L, _ in pages):
+        # a page labeller's openings; the rules' only on the pages it did not label
+        starts = labels_mod.openings(pages)
+        if not all(getattr(L, "labelled", False) for L, _ in pages if L.kind == "text"):
+            rules = book_openings(pages, contents, chapter_openings(pages, contents))
+            starts.update({n: st for n, st in rules.items() if not getattr(next(L for L, m in pages if m == n), "labelled", False)})
+    else:
+        starts = book_openings(pages, contents, chapter_openings(pages, contents))
+    auto = marks_mod.snapshot(starts, pages)
+    if marks and marks.get("reviewed"):
+        starts = marks_mod.apply(marks, pages, starts)
 
     # a top-level contents entry without a page number groups the chapters listed under it ("ضمایم چاپ دوم")
     parts = {}
@@ -1303,9 +1349,16 @@ def build(ordered):
 
     indent = paragraph_indent(pages)
     asm = Assembler(toc, fig_captions, ordered.missing, indent, is_poetry(pages, indent))
+    asm.endnotes = labels_mod.endnotes(pages, starts)
     asm.run(pages, starts)
     for ch in asm.chapters:
         ch.part = parts.get(ch.page, "")
+    if marks and marks.get("reviewed"):  # a marked part groups the chapters that follow it
+        part_pages = sorted((n, st["title"]) for n, st in starts.items() if st["kind"] == "part")
+        for ch in asm.chapters:
+            if ch.kind == "chapter":
+                ch.part = next((t for p, t in reversed(part_pages) if p < ch.page), ch.part)
+    asm.report["starts"] = auto
     found = [t for _, t, _ in asm.report["headings"]] + [ch.title for ch in asm.chapters]
     asm.report["toc_unmatched"] = [e for e in contents if e.page is not None and not any(_similar(e.title, t) > 0.6 for t in found)]
     asm.report["toc_pages"] = sorted(toc_pages)

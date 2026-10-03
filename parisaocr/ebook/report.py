@@ -16,7 +16,9 @@ def build(pages, layouts, ordered, book, extra):
     out += [f"- Source: `{extra.get('pdf')}` ({len(layouts)} PDF pages)",
             f"- Output: `{extra.get('epub')}` ({extra.get('size', 0) / 1e6:.1f} MB)",
             f"- OCR: ParisaOCR, model `{extra.get('model', '')}`",
-            "- Structure: layout rules" + (f" with learned line roles ({extra['roles']})" if extra.get("roles") else " only"),
+            "- Structure: " + (f"a page labeller's labels ({extra['roles'].split('(', 1)[1]}" if (extra.get("roles") or "").startswith("page labels")
+                               else f"layout rules with learned line roles ({extra['roles']})" if extra.get("roles") else "layout rules only")
+            + (f"; {extra['marks']} pages marked by hand (--review)" if extra.get("marks") else ""),
             f"- epubcheck: {extra.get('epubcheck', 'not run')}",
             f"- Time: {extra.get('seconds', 0):.0f} s (OCR {'reused' if extra.get('ocr_reused') else 'run'})", ""]
 

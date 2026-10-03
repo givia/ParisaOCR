@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- `parisaocr epub --review`: a local page to mark a book's parts, chapters,
+  sections and figure pages by hand — thumbnails of every page in reading
+  order with the converter's decisions on them, titles prefilled from the OCR,
+  a live table of contents, Rebuild. The marks (`OUT/NAME.marks.json`, with
+  the converter's own decisions beside them) are the truth about openings for
+  every later run of the book. Where the rules and models fail on a book, three
+  minutes of marking make its chapters right.
+
 ## 0.3.0 (2026-10-02)
 
 - EPUB 3 from a scanned book, experimental (`parisaocr epub book.pdf --out

@@ -95,6 +95,15 @@ not found as chapters. The OCR is kept in `out/book.work`, so a second run
 takes seconds. Set `EPUBCHECK_JAR` to an epubcheck jar to have the result
 validated; `--roles none` uses the layout rules without the line-role models.
 
+**Three minutes of your own marking make the chapters right whatever the
+scan.** `--review` opens a local page (127.0.0.1, nothing leaves your machine)
+with every page as a thumbnail in reading order and the converter's decisions
+on them: parts, chapters and sections with their titles, figure pages. Click
+to add or remove an opening, fix a title (the OCR of the page's first lines is
+offered), set its level, then *Rebuild*. The marks are saved as
+`out/book.marks.json`, used by every later run of the book, and the converter's
+own decisions are kept beside them for comparison.
+
 This is experimental: it was developed on 15 books (novels, a poetry
 anthology, histories with many footnotes, a book exported from Word) and
 measured on 8 others, and will meet layouts it gets wrong. Typical errors: a chapter title with an OCR error

@@ -31,6 +31,7 @@ class Line:
     column: int = 0
     latin: bool = False  # mostly Latin letters: an English line
     split: float = None  # verse: x of the gap between the two hemistichs
+    row: int = -1  # its row in the page's OCR jsonl (what a page labeller's line index refers to)
 
     @property
     def x0(self): return self.bbox[0]
@@ -57,6 +58,7 @@ class Page:
     height: int
     lines: list = field(default_factory=list)
     stamps: list = field(default_factory=list)  # boxes of a stamp burned into the scan, taken out of `lines`
+    labelled: bool = False  # a page labeller's labels are on its lines (`labels.attach`)
 
 
 def model_name(model):
@@ -100,12 +102,12 @@ def load(ocr_dir):
         lines = []
         jl = ocr_dir / "jsonl" / f"{pid}.jsonl"
         if jl.exists():
-            for row in map(json.loads, jl.read_text(encoding="utf-8").splitlines()):
+            for k, row in enumerate(map(json.loads, (r for r in jl.read_text(encoding="utf-8").splitlines() if r.strip()))):
                 text = row["text"].strip()
                 if not text:
                     continue
                 words = [Word(x["text"], tuple(x["bbox"]), x["conf"]) for x in row["words"]]
-                lines.append(Line(text, tuple(row["bbox"]), row["conf"], words, row["column"], latin=is_latin(text)))
+                lines.append(Line(text, tuple(row["bbox"]), row["conf"], words, row["column"], latin=is_latin(text), row=k))
         pages.append(Page(int(pid.split("-")[1]), pid, img, w, h, lines))
     if not pages:
         sys.exit(f"parisaocr: no page images under {ocr_dir}/pages")

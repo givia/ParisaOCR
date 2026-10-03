@@ -208,7 +208,17 @@ def cmd_epub(opts):
         o.input, o.out, o.format = list(inputs), str(out), formats
         cmd_ocr(o)
 
-    convert(opts, read)
+    res = convert(opts, read)
+    if opts.review:
+        from .ebook import review
+
+        def rebuild(marks):
+            r = convert(opts, read, marks=marks)
+            return {"epub": str(r["epub"]), "summary": r["summary"]}
+
+        r = review.Review(res["title"], review.pages_of(res["ordered"], res["book"], res["layouts"]),
+                          res["marks_path"], rebuild, res["work"] / "review")
+        review.serve(r, opts.port)
 
 
 def cmd_cut(opts):
@@ -266,6 +276,13 @@ def parser():
                         "or as HTML tables")
     e.add_argument("--roles", metavar="DIR",
                    help="line-role models that help the layout rules (default: the bundled ones; 'none' for the rules alone)")
+    e.add_argument("--labels", metavar="DIR",
+                   help="a page labeller's labels (p-NNN.json, book_outline.json, book_meta.json): they decide the "
+                        "structure instead of the layout rules (experimental)")
+    e.add_argument("--review", action="store_true",
+                   help="after converting, open a local page to mark the parts, chapters, sections and figure pages by "
+                        "hand and rebuild the EPUB; the marks (OUT/NAME.marks.json) are used by every later run")
+    e.add_argument("--port", type=int, default=0, help="port of the review page (default: any free one)")
     engine_args(e)
     e.set_defaults(func=cmd_epub)
 

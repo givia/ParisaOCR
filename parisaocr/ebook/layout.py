@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from PIL import Image
 
-from . import roles
+from . import labels, roles
 from .source import Line
 from .textutil import DIGITS, ascii_digits, is_digits
 
@@ -439,7 +439,7 @@ def burned_stamps(pages):
     return found
 
 
-def analyze_all(pages, roles_dir=None, report=None):
+def analyze_all(pages, roles_dir=None, report=None, labels_dir=None):
     """Analyze every page. Headers are recognized by a page number or by text repeated on 3+ other pages.
     Where a header or a page number may sit depends on the scan's margins: the zones are set from where
     the first and the last line of a usual page of this book lie.
@@ -447,15 +447,21 @@ def analyze_all(pages, roles_dir=None, report=None):
     ROLES_DIR: the learned line-role models (`roles.annotate`) the layout and structure rules consult —
     the bundled ones by default, or the PARISAOCR_ROLES environment variable ("{slug}" in it stands for
     the book's directory name), or "none" for the rules alone. REPORT, a dict, collects "stamps" (the stamps
-    burned into the scans that were left out, `burned_stamps`) and "roles" (which models were used)."""
+    burned into the scans that were left out, `burned_stamps`) and "roles" (which models were used).
+    LABELS_DIR (or PARISAOCR_LABELS, "{slug}" as above): a page labeller's labels (`labels`), which then decide
+    the structure of the pages they cover; the line-role models are not used."""
     found = burned_stamps(pages)
-    roles_dir = str(roles_dir or os.environ.get("PARISAOCR_ROLES") or roles.BUNDLED)
+    slug = pages[0].image.resolve().parents[3].name if pages else ""
+    labels_dir = labels_dir or os.environ.get("PARISAOCR_LABELS")
+    labelled = labels.attach(pages, pathlib.Path(labels_dir.replace("{slug}", slug)).expanduser()) if labels_dir else 0
+    roles_dir = "none" if labelled else str(roles_dir or os.environ.get("PARISAOCR_ROLES") or roles.BUNDLED)
     used = None
     if roles_dir != "none":
-        slug = pages[0].image.resolve().parents[3].name if pages else ""
         model_dir = pathlib.Path(roles_dir.replace("{slug}", slug)).expanduser()
         roles.annotate(pages, lambda p: p.image, model_dir)
         used = roles.describe(model_dir)
+    if labelled:
+        used = f"page labels ({labelled} of {len(pages)} pages)"
     if report is not None:
         report.update(stamps=found, roles=used)
     # quartiles rather than medians: in a short book chapter openings (starting low) can be half the pages
@@ -477,6 +483,8 @@ def analyze_all(pages, roles_dir=None, report=None):
         return len(k) >= 4 and any(difflib.SequenceMatcher(None, k, f).ratio() >= 0.8 for f in frequent)
 
     layouts = [analyze(p, header_like, top_zone, foot_zone) for p in pages]
+    for L in layouts:
+        labels.relayout(L, metrics)
     tops = [L.top for L in layouts if L.kind == "text" and len(L.body) >= 8]
     book_top = float(np.percentile(tops, 25)) if tops else 0.08
     for L in layouts:

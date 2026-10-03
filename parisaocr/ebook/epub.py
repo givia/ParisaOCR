@@ -249,6 +249,7 @@ class Writer:
         elif chapter.kind == "part":
             body.append(f'<section epub:type="part" role="doc-part">\n<h1 class="part">{esc(chapter.title)}</h1>')
             body += self.blocks(chapter, refs, sections)
+            body += self.notes(refs, chapter)  # a part with text of its own may have notes too
             body.append("</section>")
             attrs = ' epub:type="bodymatter"'
         else:
@@ -375,6 +376,10 @@ class Writer:
         if m.get("author"):
             md += [f'<dc:creator id="author">{esc(m["author"])}</dc:creator>',
                    '<meta refines="#author" property="role" scheme="marc:relators">aut</meta>']
+        for key, role in (("translator", "trl"), ("editor", "edt")):
+            if m.get(key):
+                md += [f'<dc:contributor id="{key}">{esc(m[key])}</dc:contributor>',
+                       f'<meta refines="#{key}" property="role" scheme="marc:relators">{role}</meta>']
         if m.get("publisher"):
             md.append(f'<dc:publisher>{esc(m["publisher"])}</dc:publisher>')
         if m.get("isbn"):
