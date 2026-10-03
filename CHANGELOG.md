@@ -1,7 +1,25 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 (2026-10-03)
 
+- `parisaocr epub --gemini`: Gemini decides the book's structure. Every page
+  image goes to Gemini with its OCR lines numbered; it says what each line is
+  (heading and level, footnote or endnote and its number, running header,
+  page number, byline, quote, verse, …), the page's type and printed number,
+  and the entries of a contents page. Two questions about the whole book
+  follow: the outline (which headings open a part or chapter, which are
+  sections, the titles as the reader should see them) and the bibliographic
+  data from the cover, title and copyright pages (title, authors, translators,
+  editors, publisher, year, ISBN). On 10 test books not used in development:
+  chapters found 86% (precision 99.5%), footnotes found 89% (precision 99%),
+  against 48% (86%) and 65% (70%) for the layout rules with the line-role
+  models. Needs a Gemini API key (`GEMINI_API_KEY` or
+  `~/.config/gemini/api_key`); about $0.004 a page with Gemini 3.8 Flash. The
+  answers are kept in the work directory, so later runs ask nothing; pages
+  Gemini blocks are read by the layout rules. `--gemini-model`,
+  `--gemini-jobs`.
+- `parisaocr epub --labels DIR`: the same structure from labels made
+  elsewhere (the files `--gemini` writes).
 - `parisaocr epub --review`: a local page to mark a book's parts, chapters,
   sections and figure pages by hand — thumbnails of every page in reading
   order with the converter's decisions on them, titles prefilled from the OCR,
@@ -9,6 +27,8 @@
   the converter's own decisions beside them) are the truth about openings for
   every later run of the book. Where the rules and models fail on a book, three
   minutes of marking make its chapters right.
+- Translators and editors are written to the EPUB as contributors (MARC roles
+  `trl`, `edt`); a part with text of its own keeps its notes.
 
 ## 0.3.0 (2026-10-02)
 

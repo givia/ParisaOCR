@@ -63,6 +63,10 @@ def convert(opts, read, marks=None):
         marks = marks_mod.load(marks_path)
     info = {}
     labels_dir = getattr(opts, "labels", None) or os.environ.get("PARISAOCR_LABELS")
+    if getattr(opts, "gemini", False) and not labels_dir:  # answers are kept in the work directory: a rerun asks nothing
+        from . import gemini
+        labels_dir = str(work / f"gemini-{opts.gemini_model}")
+        info["gemini"] = gemini.label_book(ocr_dir, labels_dir, model=opts.gemini_model, jobs=opts.gemini_jobs)
     layouts = layout.analyze_all(ps, roles_dir=opts.roles, report=info, labels_dir=labels_dir)
     if marks:
         marks_mod.apply_figures(marks, layouts)

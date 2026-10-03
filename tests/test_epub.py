@@ -116,3 +116,62 @@ def test_review_page_and_api(epub, tmp_path):
         assert post("/api/quit", {})["ok"] and r.done.is_set()
     finally:
         server.shutdown()
+
+
+def test_gemini_labels_decide(epub, monkeypatch):
+    """--gemini: every page and the two book questions go to Gemini (a stand-in here), the answers are kept in the work
+    directory and decide the structure and the metadata; a second run asks nothing."""
+    import json
+    from parisaocr.cli import main
+    from parisaocr.ebook import gemini
+    calls = []
+
+    def answer(self, contents, schema):
+        calls.append(schema)
+        text = contents[-1]["parts"][-1]["text"]
+        if schema is gemini.PAGE_SCHEMA:
+            rows = [r.partition(": ") for r in text.split("(index: OCR text):\n", 1)[1].splitlines()]
+            contents_page = any("فهرست" in t for _, _, t in rows)
+            lines = []
+            for i, _, t in rows:
+                t = t.replace(" (uncertain)", "").strip()
+                titled = any(title in t or t == label for label, title, _ in CHAPTERS)
+                numbered = bool(re.search(r"[0-9۰-۹]$", t))
+                role = ("contents" if contents_page else "header" if titled and numbered else "heading" if titled
+                        else "pagenum" if re.fullmatch(r"[0-9۰-۹]+", t) else "body")
+                lines.append({"i": int(i), "r": role, **({"l": 1} if role == "heading" else {})})
+            kind = "contents" if contents_page else "opening" if any(l["r"] == "heading" for l in lines) else "text"
+            reply = {"page": {"type": kind, "pn": ""}, "lines": lines}
+        elif schema is gemini.META_SCHEMA:
+            reply = {k: [] if k in gemini.NAMES else "none" for k in gemini.META_FIELDS}
+            reply.update(title="باغ و راه", authors=["نویسندهٔ گمینای"])
+        else:
+            heads = [r.split(" | ") for r in text.split("bylines):\n", 1)[1].splitlines() if r.strip()]
+            first = {}
+            for h in heads:
+                first.setdefault(h[1], []).append(h)
+            reply = {"headings": [{"id": int(h[0]), "level": 1 if k == 0 else 0, "kind": "chapter",
+                                   "title": ": ".join(x[6] for x in hs)} for hs in first.values() for k, h in enumerate(hs)]}
+        return {"candidates": [{"content": {"parts": [{"text": json.dumps(reply, ensure_ascii=False)}]}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 1000, "candidatesTokenCount": 100}}
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test")
+    monkeypatch.setattr(gemini, "resolve_model", lambda model, key: model)
+    monkeypatch.setattr(gemini.Gemini, "generate", answer)
+    out = epub.tmp / "out"
+    args = ["epub", str(epub.tmp / "book.pdf"), "--out", str(out), "--name", "gem", "--work", str(out / "book.work"), "--gemini", "--cpu"]
+    main(args)
+    assert calls.count(gemini.PAGE_SCHEMA) == 6 and gemini.META_SCHEMA in calls and gemini.OUTLINE_SCHEMA in calls
+    z = zipfile.ZipFile(out / "gem.epub")
+    nav = z.read("OEBPS/nav.xhtml").decode()
+    for label, title, _ in CHAPTERS:
+        assert title in nav
+    assert "نویسندهٔ گمینای" in z.read("OEBPS/content.opf").decode()
+    report = (out / "gem.report.md").read_text(encoding="utf-8")
+    assert "page labeller's labels (6 of 6 pages)" in report and "- Gemini: gemini-3.8-flash, 6 of 6 pages labelled" in report
+    assert (out / "book.work" / "gemini-gemini-3.8-flash" / "book_outline.json").exists()
+
+    def refuse(self, contents, schema):
+        raise AssertionError("asked again")
+    monkeypatch.setattr(gemini.Gemini, "generate", refuse)
+    main(args)

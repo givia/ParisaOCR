@@ -19,6 +19,7 @@ def build(pages, layouts, ordered, book, extra):
             "- Structure: " + (f"a page labeller's labels ({extra['roles'].split('(', 1)[1]}" if (extra.get("roles") or "").startswith("page labels")
                                else f"layout rules with learned line roles ({extra['roles']})" if extra.get("roles") else "layout rules only")
             + (f"; {extra['marks']} pages marked by hand (--review)" if extra.get("marks") else ""),
+            *([f"- Gemini: {extra['gemini']}"] if extra.get("gemini") else []),
             f"- epubcheck: {extra.get('epubcheck', 'not run')}",
             f"- Time: {extra.get('seconds', 0):.0f} s (OCR {'reused' if extra.get('ocr_reused') else 'run'})", ""]
 

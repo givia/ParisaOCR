@@ -276,9 +276,15 @@ def parser():
                         "or as HTML tables")
     e.add_argument("--roles", metavar="DIR",
                    help="line-role models that help the layout rules (default: the bundled ones; 'none' for the rules alone)")
+    e.add_argument("--gemini", action="store_true",
+                   help="Gemini reads every page and the book's outline and decides the structure (best quality; needs a "
+                        "Gemini API key in GEMINI_API_KEY or ~/.config/gemini/api_key; the page images and their OCR text "
+                        "are sent to Google; about $0.004 a page with the default model)")
+    e.add_argument("--gemini-model", default="gemini-3.8-flash", metavar="MODEL", help="Gemini model (default %(default)s)")
+    e.add_argument("--gemini-jobs", type=int, default=8, metavar="N", help="pages asked at the same time (default %(default)s)")
     e.add_argument("--labels", metavar="DIR",
-                   help="a page labeller's labels (p-NNN.json, book_outline.json, book_meta.json): they decide the "
-                        "structure instead of the layout rules (experimental)")
+                   help="a page labeller's labels (p-NNN.json, book_outline.json, book_meta.json, as --gemini writes "
+                        "them): they decide the structure instead of the layout rules")
     e.add_argument("--review", action="store_true",
                    help="after converting, open a local page to mark the parts, chapters, sections and figure pages by "
                         "hand and rebuild the EPUB; the marks (OUT/NAME.marks.json) are used by every later run")

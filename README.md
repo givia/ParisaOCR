@@ -104,9 +104,30 @@ offered), set its level, then *Rebuild*. The marks are saved as
 `out/book.marks.json`, used by every later run of the book, and the converter's
 own decisions are kept beside them for comparison.
 
-This is experimental: it was developed on 15 books (novels, a poetry
-anthology, histories with many footnotes, a book exported from Word) and
-measured on 8 others, and will meet layouts it gets wrong. Typical errors: a chapter title with an OCR error
+**With a Gemini API key, `--gemini` gives the best structure.** Every page
+image goes to Google's Gemini with its OCR lines numbered, and Gemini says
+what each line is: a chapter or section heading, a footnote or endnote, a
+running header, a byline, and so on. It then decides the book's outline from
+all the headings found and reads the title, authors, translators and publisher
+from the cover, title and copyright pages. On 10 test books that played no
+part in the development:
+
+|                              | chapters found | of those right | footnotes found | of those right |
+|------------------------------|---------------:|---------------:|----------------:|---------------:|
+| layout rules + line roles    | 48%            | 86%            | 65%             | 70%            |
+| `--gemini`                   | 86%            | 99.5%          | 89%             | 99%            |
+
+Most chapters it misses are found as section headings instead: books where
+the line between a chapter and a section is a judgement call. Put the key in
+`GEMINI_API_KEY` or `~/.config/gemini/api_key`. Gemini 3.8 Flash costs about
+$0.004 a page, about $1.20 for a 300-page book. The answers are kept in
+`out/book.work/gemini-…`, so later runs and `--review` rebuilds cost nothing.
+The page images and their OCR text are sent to Google; without `--gemini`
+nothing leaves your machine.
+
+This is experimental: it was developed on 23 books (novels, a poetry
+anthology, histories with many footnotes, collections, a play, a book exported
+from Word) and measured on 10 others, and will meet layouts it gets wrong. Typical errors: a chapter title with an OCR error
 or cut short, a footnote linked at the end of its page instead of at its
 marker, an unusual heading taken for a paragraph. Multi-column pages
 (magazines) and dictionaries are not supported. Example pages of books it gets
