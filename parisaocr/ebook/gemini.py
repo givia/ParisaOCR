@@ -328,6 +328,33 @@ def cost(usage, model):
     return (usage["input"] * p[0] + usage["output"] * p[1]) / 1e6 if p else None
 
 
+def estimate(ocr_dir, pages):
+    """The tokens ({"input", "output"}) that labelling PAGES and the two book questions should take. Fitted on 1,693
+    pages of 33 books labelled by gemini-3.8-flash (retries included), whose total it matches: input 545 + the prompt's
+    characters / 2.74, output 94 + 16.9 per OCR line; a page without lines is not sent. The book questions add about
+    8,000 input and 3,000 output tokens (more for a book with many headings)."""
+    usage = {"input": 8000, "output": 3000}
+    for p in pages:
+        rows = read_rows(ocr_dir, p)
+        if rows:
+            usage["input"] += 545 + len(page_prompt(rows)) / 2.74
+            usage["output"] += 94 + 16.9 * len(rows)
+    return {k: round(v) for k, v in usage.items()}
+
+
+def plan(ocr_dir, labels_dir, model=DEFAULT_MODEL):
+    """(pages of the book, pages still to label, a sentence with the expected cost of labelling them)."""
+    ocr_dir, labels_dir = pathlib.Path(ocr_dir), pathlib.Path(labels_dir)
+    pages = sorted(int(f.stem[2:]) for f in (ocr_dir / "jsonl").glob("p-*.jsonl"))
+    todo = [p for p in pages if _retry(labels_dir / f"p-{p:03d}.json")]
+    if not todo:
+        return pages, todo, f"all {len(pages)} pages already labelled by Gemini (no cost)"
+    usage = estimate(ocr_dir, todo)
+    c = cost(usage, model)
+    money = f"about ${c:.2f}" if c is not None else f"about {usage['input'] + usage['output']:,} tokens (no price known for {model})"
+    return pages, todo, f"{len(todo)} of {len(pages)} pages to label with {model}: {money}"
+
+
 # --- page labels -------------------------------------------------------------------------------------------------
 
 def page_prompt(rows):
@@ -513,15 +540,13 @@ def label_book(ocr_dir, labels_dir, model=DEFAULT_MODEL, jobs=8):
     once all pages are answered. -> a one-line summary for the report."""
     ocr_dir, labels_dir = pathlib.Path(ocr_dir), pathlib.Path(labels_dir)
     labels_dir.mkdir(parents=True, exist_ok=True)
-    pages = sorted(int(f.stem[2:]) for f in (ocr_dir / "jsonl").glob("p-*.jsonl"))
-    todo = [p for p in pages if _retry(labels_dir / f"p-{p:03d}.json")]
+    pages, todo, expected = plan(ocr_dir, labels_dir, model)
     usage, lock, stop = {"input": 0, "output": 0}, threading.Lock(), threading.Event()
     client = None
     if todo:
         key = load_key()
         client = Gemini(resolve_model(model, key), key)
-        print(f"parisaocr: Gemini ({client.model}) labels {len(todo)} pages (page images and their OCR text are sent to Google)",
-              flush=True)
+        print(f"parisaocr: Gemini: {expected} (the page images and their OCR text are sent to Google)", flush=True)
         done, step = [0], max(10, len(todo) // 10)
 
         def one(p):

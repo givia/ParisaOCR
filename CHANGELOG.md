@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `parisaocr epub --gemini` prints what the book should cost before sending
+  anything (from the pages' OCR lines; within about 6% of the actual cost on
+  the books measured), and `--gemini-estimate` prints only that and stops.
+
 ## 0.4.0 (2026-10-03)
 
 - `parisaocr epub --gemini`: Gemini decides the book's structure. Every page

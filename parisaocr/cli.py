@@ -279,7 +279,9 @@ def parser():
     e.add_argument("--gemini", action="store_true",
                    help="Gemini reads every page and the book's outline and decides the structure (best quality; needs a "
                         "Gemini API key in GEMINI_API_KEY or ~/.config/gemini/api_key; the page images and their OCR text "
-                        "are sent to Google; about $0.004 a page with the default model)")
+                        "are sent to Google; about $0.004-0.005 a page with the default model)")
+    e.add_argument("--gemini-estimate", action="store_true",
+                   help="read the pages (locally), print what --gemini would cost for this book, and stop; nothing is sent")
     e.add_argument("--gemini-model", default="gemini-3.8-flash", metavar="MODEL", help="Gemini model (default %(default)s)")
     e.add_argument("--gemini-jobs", type=int, default=8, metavar="N", help="pages asked at the same time (default %(default)s)")
     e.add_argument("--labels", metavar="DIR",

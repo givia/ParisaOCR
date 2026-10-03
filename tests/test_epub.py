@@ -118,7 +118,7 @@ def test_review_page_and_api(epub, tmp_path):
         server.shutdown()
 
 
-def test_gemini_labels_decide(epub, monkeypatch):
+def test_gemini_labels_decide(epub, monkeypatch, capsys):
     """--gemini: every page and the two book questions go to Gemini (a stand-in here), the answers are kept in the work
     directory and decide the structure and the metadata; a second run asks nothing."""
     import json
@@ -160,7 +160,11 @@ def test_gemini_labels_decide(epub, monkeypatch):
     monkeypatch.setattr(gemini.Gemini, "generate", answer)
     out = epub.tmp / "out"
     args = ["epub", str(epub.tmp / "book.pdf"), "--out", str(out), "--name", "gem", "--work", str(out / "book.work"), "--gemini", "--cpu"]
+    with pytest.raises(SystemExit):
+        main(args[:-2] + ["--gemini-estimate", "--cpu"])
+    assert re.search(r"6 of 6 pages to label with gemini-3\.8-flash: about \$0\.0\d; nothing was sent", capsys.readouterr().out) and not calls
     main(args)
+    assert "6 of 6 pages to label with gemini-3.8-flash: about $" in capsys.readouterr().out
     assert calls.count(gemini.PAGE_SCHEMA) == 6 and gemini.META_SCHEMA in calls and gemini.OUTLINE_SCHEMA in calls
     z = zipfile.ZipFile(out / "gem.epub")
     nav = z.read("OEBPS/nav.xhtml").decode()
@@ -175,3 +179,6 @@ def test_gemini_labels_decide(epub, monkeypatch):
         raise AssertionError("asked again")
     monkeypatch.setattr(gemini.Gemini, "generate", refuse)
     main(args)
+    with pytest.raises(SystemExit):
+        main(args[:-2] + ["--gemini-estimate", "--cpu"])
+    assert "all 6 pages already labelled by Gemini (no cost)" in capsys.readouterr().out

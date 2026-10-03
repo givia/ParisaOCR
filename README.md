@@ -31,6 +31,8 @@ parisaocr ocr book.pdf --out out --format txt,hocr,jsonl
 parisaocr ocr book.pdf --out out --first 10 --last 20
 parisaocr ocr book.pdf --out out --format pdf     # out/pdf/book.pdf: searchable
 parisaocr epub book.pdf --out out                 # out/book.epub (experimental)
+parisaocr epub book.pdf --out out --gemini        # the structure decided by Gemini (API key)
+parisaocr epub book.pdf --out out --review        # then mark chapters by hand in the browser
 ```
 
 Inputs are images, directories of images, or a PDF (scanned pages are
@@ -75,8 +77,9 @@ turns a scanned Persian book into an EPUB 3 e-book, `out/book.epub`, that
 reflows on phones and e-readers. Besides reading the pages, it works out the
 book from the page layout and the printed table of contents, helped by small
 line-role models (gradient-boosted trees over layout features, bundled; see
-[MODEL_CARD.md](MODEL_CARD.md)) — no language model, nothing leaves your
-machine:
+[MODEL_CARD.md](MODEL_CARD.md)). By default no language model is used and
+nothing leaves your machine; with a Gemini API key, `--gemini` (below) does
+much better. What it builds:
 
 - chapters, with their titles and the book's table of contents; section
   headings, paragraphs joined across pages, block quotes;
@@ -87,22 +90,16 @@ machine:
   tables, but OCR of table numbers is not reliable enough to trust);
 - the printed page numbers as the e-book's page list; pages put in book order
   by their printed numbers (reversed runs, duplicate scans and missing pages
-  are found and reported).
+  are found and reported);
+- the book's title, author, publisher and ISBN from `--title`, `--author` etc.
+  or a `--meta` JSON file; with `--gemini` they, and the translators and
+  editors, are read from the cover, title and copyright pages.
 
 `out/book.report.md` lists what was decided and where to look first: pages
 read with low confidence, notes whose marker was not found, contents entries
 not found as chapters. The OCR is kept in `out/book.work`, so a second run
 takes seconds. Set `EPUBCHECK_JAR` to an epubcheck jar to have the result
 validated; `--roles none` uses the layout rules without the line-role models.
-
-**Three minutes of your own marking make the chapters right whatever the
-scan.** `--review` opens a local page (127.0.0.1, nothing leaves your machine)
-with every page as a thumbnail in reading order and the converter's decisions
-on them: parts, chapters and sections with their titles, figure pages. Click
-to add or remove an opening, fix a title (the OCR of the page's first lines is
-offered), set its level, then *Rebuild*. The marks are saved as
-`out/book.marks.json`, used by every later run of the book, and the converter's
-own decisions are kept beside them for comparison.
 
 **With a Gemini API key, `--gemini` gives the best structure.** Every page
 image goes to Google's Gemini with its OCR lines numbered, and Gemini says
@@ -120,16 +117,31 @@ part in the development:
 Most chapters it misses are found as section headings instead: books where
 the line between a chapter and a section is a judgement call. Put the key in
 `GEMINI_API_KEY` or `~/.config/gemini/api_key`. Gemini 3.8 Flash costs about
-$0.004 a page, about $1.20 for a 300-page book. The answers are kept in
-`out/book.work/gemini-…`, so later runs and `--review` rebuilds cost nothing.
+$0.004 to $0.005 a page (more for dense pages), $1.20 to $1.50 for a 300-page
+book; blank pages are not sent. Before sending anything, `--gemini` prints
+what this book should cost (within about 6% on the books we measured), and
+`--gemini-estimate` prints only that, after reading the pages locally. The
+answers are kept in `out/book.work/gemini-…`, so later runs and `--review`
+rebuilds cost nothing.
 The page images and their OCR text are sent to Google; without `--gemini`
 nothing leaves your machine.
 
+**Three minutes of your own marking make the chapters right whatever the
+scan,** with or without Gemini. `--review` opens a local page (127.0.0.1,
+nothing leaves your machine) with every page as a thumbnail in reading order
+and the converter's decisions on them: parts, chapters and sections with
+their titles, figure pages. Click to add or remove an opening, fix a title
+(the OCR of the page's first lines is offered), set its level, then
+*Rebuild*. The marks are saved as `out/book.marks.json`, used by every later
+run of the book, and the converter's own decisions are kept beside them for
+comparison.
+
 This is experimental: it was developed on 23 books (novels, a poetry
 anthology, histories with many footnotes, collections, a play, a book exported
-from Word) and measured on 10 others, and will meet layouts it gets wrong. Typical errors: a chapter title with an OCR error
-or cut short, a footnote linked at the end of its page instead of at its
-marker, an unusual heading taken for a paragraph. Multi-column pages
+from Word) and measured on 10 others, and will meet layouts it gets wrong.
+Typical errors: a chapter title with an OCR error or cut short, a footnote
+linked at the end of its page instead of at its marker, an unusual heading
+taken for a paragraph. Multi-column pages
 (magazines) and dictionaries are not supported. Example pages of books it gets
 wrong are very welcome in the issues.
 
@@ -254,6 +266,8 @@ parisaocr ocr book.pdf --out out --format pdf   # out/pdf/book.pdf: پی‌دی�
 
 ```
 parisaocr epub book.pdf --out out --title "…" --author "…"
+parisaocr epub book.pdf --out out --gemini      # ساختار کتاب با Gemini
+parisaocr epub book.pdf --out out --review      # سپس علامت‌گذاری فصل‌ها در مرورگر
 ```
 
 از کتاب اسکن‌شده یک کتاب EPUB می‌سازد که روی گوشی و کتاب‌خوان خوانده می‌شود: فصل‌ها
@@ -261,6 +275,22 @@ parisaocr epub book.pdf --out out --title "…" --author "…"
 جدول‌ها، و شمارهٔ صفحه‌های چاپی. گزارشی هم (`out/book.report.md`) می‌نویسد که نشان
 می‌دهد کجا را باید بررسی کرد. این قابلیت آزمایشی است؛ اگر کتابی درست تبدیل نشد، لطفاً
 در بخش Issues خبر بدهید.
+
+اگر کلید API برای Gemini دارید، با `--gemini` ساختار کتاب بسیار بهتر درمی‌آید: تصویر هر
+صفحه همراه با سطرهای شماره‌خوردهٔ اوسی‌آر به Gemini گوگل فرستاده می‌شود تا بگوید هر سطر
+چیست (عنوان فصل یا زیربخش، پانویس، سرصفحه و …)؛ سپس ساختار کل کتاب و مشخصات آن
+(عنوان، نویسنده، مترجم، ناشر) را از روی همهٔ عنوان‌ها و صفحه‌های جلد و شناسنامه تعیین
+می‌کند. روی ۱۰ کتاب آزمون که در ساختن ابزار به کار نرفته بودند، ۸۶٪ فصل‌ها و ۸۹٪
+پانویس‌ها را پیدا کرد، در برابر ۴۸٪ و ۶۵٪ بدون آن. کلید را در `GEMINI_API_KEY` یا در
+فایل `~/.config/gemini/api_key` بگذارید. هزینه با Gemini 3.8 Flash برای هر صفحه حدود ۰٫۰۰۴
+تا ۰٫۰۰۵ دلار است (۱٫۲ تا ۱٫۵ دلار برای کتابی ۳۰۰ صفحه‌ای). پیش از ارسال، هزینهٔ تقریبی همان
+کتاب چاپ می‌شود، و با `--gemini-estimate` فقط همین برآورد را می‌بینید و چیزی فرستاده نمی‌شود.
+پاسخ‌ها نگه داشته می‌شوند، پس اجرای دوباره هزینه‌ای ندارد. با این گزینه تصویر صفحه‌ها و متن اوسی‌آر به گوگل فرستاده می‌شود؛
+بدون آن هیچ چیز از رایانهٔ شما بیرون نمی‌رود.
+
+با `--review` صفحه‌ای در مرورگر خودتان باز می‌شود که همهٔ صفحه‌های کتاب را کوچک و به
+ترتیب نشان می‌دهد. آغاز بخش‌ها، فصل‌ها و زیربخش‌ها و عنوانشان را درست کنید و کتاب را
+دوباره بسازید؛ این علامت‌ها ذخیره می‌شوند و در اجراهای بعدی هم به کار می‌روند.
 
 محدودیت‌ها:
 

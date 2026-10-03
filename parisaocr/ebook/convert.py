@@ -54,6 +54,11 @@ def convert(opts, read, marks=None):
     reused = done >= n and not opts.redo
     if not reused:
         read([str(pdf)], ocr_dir, "txt,hocr,jsonl")
+    if getattr(opts, "gemini_estimate", False):
+        from . import gemini
+        expected = gemini.plan(ocr_dir, work / f"gemini-{opts.gemini_model}", opts.gemini_model)[2]
+        print(f"parisaocr: Gemini: {expected}; nothing was sent (run with --gemini to label them)")
+        raise SystemExit(0)
 
     print("parisaocr: page layout", flush=True)
     ps = source.load(ocr_dir)
