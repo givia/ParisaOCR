@@ -196,9 +196,30 @@ def cmd_pages(opts):
     print(f"{len(got)} pages in {out}")
 
 
+LLM_DEFAULT = "gemini-3.8-flash"
+
+
+def _llm_model(value):
+    """--llm's MODEL; a path given there is the book put after the flag ("--llm book.pdf"), not a model."""
+    if value.lower().endswith((".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff")) or os.path.exists(value):
+        raise argparse.ArgumentTypeError(f"{value!r} is not a model: put the book before --llm, or write --llm=MODEL")
+    return value
+
+
+def llm_options(opts):
+    """The language-model options as convert reads them (opts.gemini, gemini_model, gemini_estimate, gemini_jobs),
+    from --llm, --llm-estimate and --llm-jobs, or from the older --gemini* names."""
+    model = opts.llm or opts.gemini_model or LLM_DEFAULT
+    opts.gemini = opts.llm is not None or opts.gemini
+    opts.gemini_model, opts.gemini_estimate = model, opts.llm_estimate or opts.gemini_estimate
+    opts.gemini_jobs = opts.llm_jobs or opts.gemini_jobs or 8
+    return opts
+
+
 def cmd_epub(opts):
     """A scanned book to EPUB: OCR with the engine options given, then `ebook.convert`."""
     from .ebook.convert import convert
+    llm_options(opts)
     defaults = vars(parser().parse_args(["ocr", "-"]))
 
     def read(inputs, out, formats):
@@ -276,20 +297,24 @@ def parser():
                         "or as HTML tables")
     e.add_argument("--roles", metavar="DIR",
                    help="line-role models that help the layout rules (default: the bundled ones; 'none' for the rules alone)")
-    e.add_argument("--gemini", action="store_true",
-                   help="Gemini reads every page and the book's outline and decides the structure (best quality; needs a "
-                        "Gemini API key in GEMINI_API_KEY or ~/.config/gemini/api_key; the page images and their OCR text "
-                        "are sent to Google; about $0.004-0.005 a page with the default model)")
-    e.add_argument("--gemini-estimate", action="store_true",
-                   help="read the pages (locally), print what --gemini would cost for this book, and stop; nothing is "
-                        "sent (calibrated on Gemini; for openrouter: models a rough guide)")
-    e.add_argument("--gemini-model", default="gemini-3.8-flash", metavar="MODEL",
-                   help="the labeller: a Gemini model (default %(default)s), or openrouter:VENDOR/MODEL for a model asked "
-                        "through OpenRouter, e.g. openrouter:google/gemma-4-31b-it (key in OPENROUTER_API_KEY or "
-                        "~/.config/openrouter/api_key; only providers that keep no data are used)")
-    e.add_argument("--gemini-jobs", type=int, default=8, metavar="N", help="pages asked at the same time (default %(default)s)")
+    e.add_argument("--llm", nargs="?", const=LLM_DEFAULT, default=None, metavar="MODEL", type=_llm_model,
+                   help="a language model reads every page and the book's outline and decides the structure (best "
+                        f"quality). MODEL: a Gemini model (default {LLM_DEFAULT}; key in GEMINI_API_KEY or "
+                        "~/.config/gemini/api_key; about $0.004-0.005 a page), or openrouter:VENDOR/NAME for a model asked "
+                        "through OpenRouter, e.g. openrouter:qwen/qwen3.8-27b (key in OPENROUTER_API_KEY or "
+                        "~/.config/openrouter/api_key; only providers that keep no data are used). The page images and "
+                        "their OCR text are sent to that service")
+    e.add_argument("--llm-estimate", action="store_true",
+                   help="read the pages (locally), print what --llm would cost for this book, and stop; nothing is sent "
+                        "(calibrated on Gemini; for openrouter: models a rough guide)")
+    e.add_argument("--llm-jobs", type=int, default=None, metavar="N", help="pages asked at the same time (default 8)")
+    # the names of 0.4.0 and 0.5.0, still accepted
+    e.add_argument("--gemini", action="store_true", help=argparse.SUPPRESS)
+    e.add_argument("--gemini-estimate", action="store_true", help=argparse.SUPPRESS)
+    e.add_argument("--gemini-model", default=None, help=argparse.SUPPRESS)
+    e.add_argument("--gemini-jobs", type=int, default=None, help=argparse.SUPPRESS)
     e.add_argument("--labels", metavar="DIR",
-                   help="a page labeller's labels (p-NNN.json, book_outline.json, book_meta.json, as --gemini writes "
+                   help="a page labeller's labels (p-NNN.json, book_outline.json, book_meta.json, as --llm writes "
                         "them): they decide the structure instead of the layout rules")
     e.add_argument("--review", action="store_true",
                    help="after converting, open a local page to mark the parts, chapters, sections and figure pages by "

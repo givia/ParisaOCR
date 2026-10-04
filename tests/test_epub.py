@@ -119,7 +119,7 @@ def test_review_page_and_api(epub, tmp_path):
 
 
 def test_gemini_labels_decide(epub, monkeypatch, capsys):
-    """--gemini: every page and the two book questions go to Gemini (a stand-in here), the answers are kept in the work
+    """--llm: every page and the two book questions go to Gemini (a stand-in here), the answers are kept in the work
     directory and decide the structure and the metadata; a second run asks nothing."""
     import json
     from parisaocr.cli import main
@@ -159,9 +159,9 @@ def test_gemini_labels_decide(epub, monkeypatch, capsys):
     monkeypatch.setattr(gemini, "resolve_model", lambda model, key: model)
     monkeypatch.setattr(gemini.Gemini, "generate", answer)
     out = epub.tmp / "out"
-    args = ["epub", str(epub.tmp / "book.pdf"), "--out", str(out), "--name", "gem", "--work", str(out / "book.work"), "--gemini", "--cpu"]
+    args = ["epub", str(epub.tmp / "book.pdf"), "--out", str(out), "--name", "gem", "--work", str(out / "book.work"), "--llm", "--cpu"]
     with pytest.raises(SystemExit):
-        main(args[:-2] + ["--gemini-estimate", "--cpu"])
+        main(args[:-2] + ["--llm-estimate", "--cpu"])
     assert re.search(r"6 of 6 pages to label with gemini-3\.8-flash: about \$0\.0\d; nothing was sent", capsys.readouterr().out) and not calls
     main(args)
     assert "6 of 6 pages to label with gemini-3.8-flash: about $" in capsys.readouterr().out
@@ -172,13 +172,13 @@ def test_gemini_labels_decide(epub, monkeypatch, capsys):
         assert title in nav
     assert "نویسندهٔ گمینای" in z.read("OEBPS/content.opf").decode()
     report = (out / "gem.report.md").read_text(encoding="utf-8")
-    assert "page labeller's labels (6 of 6 pages)" in report and "- Gemini: gemini-3.8-flash, 6 of 6 pages labelled" in report
+    assert "page labeller's labels (6 of 6 pages)" in report and "- Page labeller: gemini-3.8-flash, 6 of 6 pages labelled" in report
     assert (out / "book.work" / "gemini-gemini-3.8-flash" / "book_outline.json").exists()
 
     def refuse(self, contents, schema):
         raise AssertionError("asked again")
     monkeypatch.setattr(gemini.Gemini, "generate", refuse)
-    main(args)
+    main(args[:-2] + ["--gemini", "--cpu"])  # the name before 0.5.1
     with pytest.raises(SystemExit):
         main(args[:-2] + ["--gemini-estimate", "--cpu"])
     assert "all 6 pages already labelled by Gemini (no cost)" in capsys.readouterr().out

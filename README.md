@@ -31,7 +31,7 @@ parisaocr ocr book.pdf --out out --format txt,hocr,jsonl
 parisaocr ocr book.pdf --out out --first 10 --last 20
 parisaocr ocr book.pdf --out out --format pdf     # out/pdf/book.pdf: searchable
 parisaocr epub book.pdf --out out                 # out/book.epub (experimental)
-parisaocr epub book.pdf --out out --gemini        # the structure decided by Gemini (API key)
+parisaocr epub book.pdf --out out --llm           # the structure decided by Gemini (API key)
 parisaocr epub book.pdf --out out --review        # then mark chapters by hand in the browser
 ```
 
@@ -78,7 +78,7 @@ reflows on phones and e-readers. Besides reading the pages, it works out the
 book from the page layout and the printed table of contents, helped by small
 line-role models (gradient-boosted trees over layout features, bundled; see
 [MODEL_CARD.md](MODEL_CARD.md)). By default no language model is used and
-nothing leaves your machine; with a Gemini API key, `--gemini` (below) does
+nothing leaves your machine; with a Gemini API key, `--llm` (below) does
 much better. What it builds:
 
 - chapters, with their titles and the book's table of contents; section
@@ -92,7 +92,7 @@ much better. What it builds:
   by their printed numbers (reversed runs, duplicate scans and missing pages
   are found and reported);
 - the book's title, author, publisher and ISBN from `--title`, `--author` etc.
-  or a `--meta` JSON file; with `--gemini` they, and the translators and
+  or a `--meta` JSON file; with `--llm` they, and the translators and
   editors, are read from the cover, title and copyright pages.
 
 Footnote numbers the OCR lost or cut are re-read from the page image
@@ -103,7 +103,7 @@ not found as chapters. The OCR is kept in `out/book.work`, so a second run
 takes seconds. Set `EPUBCHECK_JAR` to an epubcheck jar to have the result
 validated; `--roles none` uses the layout rules without the line-role models.
 
-**With a Gemini API key, `--gemini` gives the best structure.** Every page
+**With a Gemini API key, `--llm` gives the best structure.** Every page
 image goes to Google's Gemini with its OCR lines numbered, and Gemini says
 what each line is: a chapter or section heading, a footnote or endnote, a
 running header, a byline, and so on. It then decides the book's outline from
@@ -114,28 +114,28 @@ part in the development (measured with 0.4.0):
 |                              | chapters found | of those right | footnotes found | of those right |
 |------------------------------|---------------:|---------------:|----------------:|---------------:|
 | layout rules + line roles    | 48%            | 86%            | 65%             | 70%            |
-| `--gemini`                   | 86%            | 99.5%          | 89%             | 99%            |
+| `--llm`                      | 86%            | 99.5%          | 89%             | 99%            |
 
 Most chapters it misses are found as section headings instead: books where
 the line between a chapter and a section is a judgement call. Put the key in
 `GEMINI_API_KEY` or `~/.config/gemini/api_key`. Gemini 3.8 Flash costs about
 $0.004 to $0.005 a page (more for dense pages), $1.20 to $1.50 for a 300-page
-book; blank pages are not sent. Before sending anything, `--gemini` prints
+book; blank pages are not sent. Before sending anything, `--llm` prints
 what this book should cost (within about 6% on the books we measured), and
-`--gemini-estimate` prints only that, after reading the pages locally. The
+`--llm-estimate` prints only that, after reading the pages locally. The
 answers are kept in `out/book.work/gemini-…`, so later runs and `--review`
 rebuilds cost nothing.
-The page images and their OCR text are sent to Google; without `--gemini`
+The page images and their OCR text are sent to Google; without `--llm`
 nothing leaves your machine.
 
-**Cheaper models through OpenRouter.** `--gemini --gemini-model openrouter:VENDOR/MODEL`
+**Cheaper models through OpenRouter.** `--llm openrouter:VENDOR/MODEL`
 asks the same questions to an open model served by
 [OpenRouter](https://openrouter.ai) (key in `OPENROUTER_API_KEY` or
 `~/.config/openrouter/api_key`). Only providers that keep no data, take none
 for training and enforce the answer's format are used. On two of our
 development books with many footnotes (326 pages, 64 footnotes checked):
 
-| `--gemini-model`                       | chapters found | extra chapters | footnotes right¹ | 300-page book |
+| `--llm MODEL`                          | chapters found | extra chapters | footnotes right¹ | 300-page book |
 |----------------------------------------|---------------:|---------------:|-----------------:|--------------:|
 | `gemini-3.8-flash` (default)           | 17 of 17       | 0              | 92%              | about $1.25   |
 | `openrouter:qwen/qwen3.8-27b`          | 17 of 17       | 0              | 79% (85%²)       | about $0.50   |
@@ -150,7 +150,7 @@ closely; the Gemini figures above for 10 test books are the measured ones.
 can name providers or exclude some, and add to the privacy settings, not
 weaken them. The cost estimate is calibrated on Gemini and only a rough guide
 for these models. Gemma 4 31B is also free from Google with a Gemini key
-(`--gemini --gemini-model gemma-4-31b-it --gemini-jobs 2`), but limited to
+(`--llm gemma-4-31b-it --llm-jobs 2`), but limited to
 16,000 input tokens a minute: about 6 pages a minute, 50 minutes for a
 300-page book; with more jobs Google refuses requests and the run stops after
 a few dozen pages (running it again continues).
@@ -295,7 +295,7 @@ parisaocr ocr book.pdf --out out --format pdf   # out/pdf/book.pdf: پی‌دی�
 
 ```
 parisaocr epub book.pdf --out out --title "…" --author "…"
-parisaocr epub book.pdf --out out --gemini      # ساختار کتاب با Gemini
+parisaocr epub book.pdf --out out --llm         # ساختار کتاب با Gemini
 parisaocr epub book.pdf --out out --review      # سپس علامت‌گذاری فصل‌ها در مرورگر
 ```
 
@@ -305,7 +305,7 @@ parisaocr epub book.pdf --out out --review      # سپس علامت‌گذاری
 می‌دهد کجا را باید بررسی کرد. این قابلیت آزمایشی است؛ اگر کتابی درست تبدیل نشد، لطفاً
 در بخش Issues خبر بدهید.
 
-اگر کلید API برای Gemini دارید، با `--gemini` ساختار کتاب بسیار بهتر درمی‌آید: تصویر هر
+اگر کلید API برای Gemini دارید، با `--llm` ساختار کتاب بسیار بهتر درمی‌آید: تصویر هر
 صفحه همراه با سطرهای شماره‌خوردهٔ اوسی‌آر به Gemini گوگل فرستاده می‌شود تا بگوید هر سطر
 چیست (عنوان فصل یا زیربخش، پانویس، سرصفحه و …)؛ سپس ساختار کل کتاب و مشخصات آن
 (عنوان، نویسنده، مترجم، ناشر) را از روی همهٔ عنوان‌ها و صفحه‌های جلد و شناسنامه تعیین
@@ -313,12 +313,12 @@ parisaocr epub book.pdf --out out --review      # سپس علامت‌گذاری
 پانویس‌ها را پیدا کرد، در برابر ۴۸٪ و ۶۵٪ بدون آن. کلید را در `GEMINI_API_KEY` یا در
 فایل `~/.config/gemini/api_key` بگذارید. هزینه با Gemini 3.8 Flash برای هر صفحه حدود ۰٫۰۰۴
 تا ۰٫۰۰۵ دلار است (۱٫۲ تا ۱٫۵ دلار برای کتابی ۳۰۰ صفحه‌ای). پیش از ارسال، هزینهٔ تقریبی همان
-کتاب چاپ می‌شود، و با `--gemini-estimate` فقط همین برآورد را می‌بینید و چیزی فرستاده نمی‌شود.
+کتاب چاپ می‌شود، و با `--llm-estimate` فقط همین برآورد را می‌بینید و چیزی فرستاده نمی‌شود.
 پاسخ‌ها نگه داشته می‌شوند، پس اجرای دوباره هزینه‌ای ندارد. با این گزینه تصویر صفحه‌ها و متن اوسی‌آر به گوگل فرستاده می‌شود؛
 بدون آن هیچ چیز از رایانهٔ شما بیرون نمی‌رود.
 
-مدل‌های ارزان‌تر از راه OpenRouter: با `--gemini --gemini-model openrouter:qwen/qwen3.8-27b` (حدود
-۰٫۵ دلار برای کتابی ۳۰۰ صفحه‌ای) یا `--gemini --gemini-model openrouter:google/gemma-4-31b-it` (حدود ۰٫۱۵
+مدل‌های ارزان‌تر از راه OpenRouter: با `--llm openrouter:qwen/qwen3.8-27b` (حدود
+۰٫۵ دلار برای کتابی ۳۰۰ صفحه‌ای) یا `--llm openrouter:google/gemma-4-31b-it` (حدود ۰٫۱۵
 دلار) همین پرسش‌ها از یک مدل باز پرسیده می‌شود. کلید را در `OPENROUTER_API_KEY` یا فایل
 `~/.config/openrouter/api_key` بگذارید. فقط ارائه‌دهنده‌هایی به کار می‌روند که داده‌ای نگه
 نمی‌دارند و برای آموزش استفاده نمی‌کنند. روی دو کتاب پرپانویس، هر دو مدل همهٔ فصل‌ها را پیدا

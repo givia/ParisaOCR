@@ -1,4 +1,4 @@
-"""Gemini as the page labeller of `parisaocr epub --gemini`.
+"""Gemini as the page labeller of `parisaocr epub --llm`.
 
 Every page image goes to Gemini with its OCR lines tagged by number, and Gemini says what each line is (heading and
 its level, footnote or endnote and its number, running header, page number, byline, quote, verse, ...), the page's
@@ -185,7 +185,7 @@ def load_key(model=DEFAULT_MODEL):
         except (OSError, UnicodeDecodeError) as e:
             sys.exit(f"parisaocr: ~/.config/{service}/api_key cannot be read ({type(e).__name__}); save it as one line of text")
     if not key:
-        sys.exit(f"parisaocr: --gemini needs {what}: set {env}, or put the key in ~/.config/{service}/api_key "
+        sys.exit(f"parisaocr: --llm needs {what}: set {env}, or put the key in ~/.config/{service}/api_key "
                  f"(one line); keys are made at {url}")
     if not re.fullmatch(r"[!-~]+", key):  # sent in an HTTP header and masked in errors: only the key, one line
         sys.exit(f"parisaocr: {env} or ~/.config/{service}/api_key must hold the key alone, on one line")

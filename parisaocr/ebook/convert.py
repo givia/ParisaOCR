@@ -58,7 +58,7 @@ def convert(opts, read, marks=None):
         from . import gemini
         expected = gemini.plan(ocr_dir, work / gemini.labels_dirname(opts.gemini_model), opts.gemini_model)[2]
         who = "OpenRouter" if gemini.is_openrouter(opts.gemini_model) else "Gemini"
-        print(f"parisaocr: {who}: {expected}; nothing was sent (run with --gemini to label them)")
+        print(f"parisaocr: {who}: {expected}; nothing was sent (run with --llm to label them)")
         raise SystemExit(0)
 
     if (opts.model == "default" or opts.model.startswith("kraken:")) and os.environ.get("PARISAOCR_NOTENUM", "1") != "0" \

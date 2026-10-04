@@ -290,3 +290,31 @@ def test_client_robustness(monkeypatch, tmp_path):
     monkeypatch.setenv("PARISAOCR_OPENROUTER_EXTRA", '{"model": "other/model"}')
     with pytest.raises(SystemExit, match="cannot set model"):
         gemini.OpenRouter(MODEL, "k")
+
+
+def test_llm_options(capsys):
+    """--llm [MODEL], --llm-estimate, --llm-jobs, and the --gemini* names they replace; a book after --llm is refused."""
+    from parisaocr.cli import llm_options, parser
+
+    def opts(*extra):
+        return llm_options(parser().parse_args(["epub", "book.pdf", "--out", "out", *extra]))
+
+    def picked(o):
+        return o.gemini, o.gemini_model, o.gemini_estimate, o.gemini_jobs
+
+    assert picked(opts()) == (False, "gemini-3.8-flash", False, 8)
+    assert picked(opts("--llm")) == (True, "gemini-3.8-flash", False, 8)
+    assert picked(opts("--llm", "--cpu")) == (True, "gemini-3.8-flash", False, 8)
+    assert picked(opts("--llm", MODEL, "--llm-jobs", "4")) == (True, MODEL, False, 4)
+    assert picked(opts(f"--llm={MODEL}", "--llm-estimate")) == (True, MODEL, True, 8)
+    assert picked(opts("--llm-estimate")) == (False, "gemini-3.8-flash", True, 8)
+    assert picked(opts("--gemini", "--gemini-model", MODEL, "--gemini-jobs", "2")) == (True, MODEL, False, 2)
+    assert picked(opts("--gemini-model", MODEL)) == (False, MODEL, False, 8)  # a model alone sends nothing
+    assert picked(opts("--gemini-estimate")) == (False, "gemini-3.8-flash", True, 8)
+    with pytest.raises(SystemExit):
+        parser().parse_args(["epub", "--out", "out", "--llm", "book.pdf"])
+    assert "'book.pdf' is not a model" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        parser().parse_args(["epub", "-h"])
+    shown = capsys.readouterr().out
+    assert "--llm-estimate" in shown and "--gemini" not in shown

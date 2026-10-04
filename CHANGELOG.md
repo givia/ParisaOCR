@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.1 (2026-10-04)
+
+- **The labeller's options are renamed:** `--llm` (Gemini 3.8 Flash) or
+  `--llm MODEL` (a Gemini model, or `openrouter:VENDOR/NAME`) in place of
+  `--gemini` and `--gemini-model`, and `--llm-estimate`, `--llm-jobs` in place
+  of `--gemini-estimate`, `--gemini-jobs`. The old names still work. A book
+  path put right after `--llm` (`--llm book.pdf`) is refused with a message,
+  not taken for a model.
+
 ## 0.5.0 (2026-10-04)
 
 - **Cheaper labellers through OpenRouter:** `--gemini --gemini-model
