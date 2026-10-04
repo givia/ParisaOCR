@@ -56,10 +56,22 @@ def convert(opts, read, marks=None):
         read([str(pdf)], ocr_dir, "txt,hocr,jsonl")
     if getattr(opts, "gemini_estimate", False):
         from . import gemini
-        expected = gemini.plan(ocr_dir, work / f"gemini-{opts.gemini_model}", opts.gemini_model)[2]
-        print(f"parisaocr: Gemini: {expected}; nothing was sent (run with --gemini to label them)")
+        expected = gemini.plan(ocr_dir, work / gemini.labels_dirname(opts.gemini_model), opts.gemini_model)[2]
+        who = "OpenRouter" if gemini.is_openrouter(opts.gemini_model) else "Gemini"
+        print(f"parisaocr: {who}: {expected}; nothing was sent (run with --gemini to label them)")
         raise SystemExit(0)
 
+    if (opts.model == "default" or opts.model.startswith("kraken:")) and os.environ.get("PARISAOCR_NOTENUM", "1") != "0" \
+            and not source.notenum_current(ocr_dir):
+        try:  # note numbers the line reader lost, re-read from the image (cached with the OCR)
+            from . import notenum
+            from ..cli import BUNDLED_MODEL
+            import torch
+            device = "cpu" if getattr(opts, "cpu", False) or not torch.cuda.is_available() else "cuda:0"
+            notenum.reread(ocr_dir, BUNDLED_MODEL if opts.model == "default" else opts.model[7:], device)
+        except Exception as e:  # noqa: BLE001  a help, not a step the book needs: it is converted without them
+            print(f"parisaocr: note numbers not re-read ({type(e).__name__}: {str(e)[:200]}); converting without them",
+                  flush=True)
     print("parisaocr: page layout", flush=True)
     ps = source.load(ocr_dir)
     latin = sum(l.latin for p in ps for l in p.lines)
@@ -70,7 +82,7 @@ def convert(opts, read, marks=None):
     labels_dir = getattr(opts, "labels", None) or os.environ.get("PARISAOCR_LABELS")
     if getattr(opts, "gemini", False) and not labels_dir:  # answers are kept in the work directory: a rerun asks nothing
         from . import gemini
-        labels_dir = str(work / f"gemini-{opts.gemini_model}")
+        labels_dir = str(work / gemini.labels_dirname(opts.gemini_model))
         info["gemini"] = gemini.label_book(ocr_dir, labels_dir, model=opts.gemini_model, jobs=opts.gemini_jobs)
     layouts = layout.analyze_all(ps, roles_dir=opts.roles, report=info, labels_dir=labels_dir)
     if marks:

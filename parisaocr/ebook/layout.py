@@ -439,6 +439,25 @@ def burned_stamps(pages):
     return found
 
 
+def head_hints(pages, hints_dir):
+    """Replace the line-role models' heading probability (p_head) by another labeller's word: 1.0 for the lines its
+    labels (HINTS_DIR/p-NNN.json, `labels` format) call a heading, 0.0 for its other lines. The models' level and
+    every other prediction stay, and the rules still decide which headings open a chapter (contents, the book's
+    opening template). -> a note for the report."""
+    pages_hinted = heads = 0
+    for p in pages:
+        g = labels.load_page(hints_dir, p.index)
+        if g is None:
+            continue
+        pages_hinted += 1
+        for l in p.lines:
+            it = g["lines"].get(l.row)
+            if it is not None and getattr(l, "p_head", None) is not None:
+                l.p_head = 1.0 if it.get("r") == "heading" else 0.0
+                heads += it.get("r") == "heading"
+    return f"headings from {hints_dir.parent.name} ({pages_hinted} pages, {heads} heading lines)"
+
+
 def analyze_all(pages, roles_dir=None, report=None, labels_dir=None):
     """Analyze every page. Headers are recognized by a page number or by text repeated on 3+ other pages.
     Where a header or a page number may sit depends on the scan's margins: the zones are set from where
@@ -460,6 +479,9 @@ def analyze_all(pages, roles_dir=None, report=None, labels_dir=None):
         model_dir = pathlib.Path(roles_dir.replace("{slug}", slug)).expanduser()
         roles.annotate(pages, lambda p: p.image, model_dir)
         used = roles.describe(model_dir)
+        hints = os.environ.get("PARISAOCR_HEAD_HINTS")  # experimental: another labeller's headings as the evidence
+        if hints:
+            used += "; " + head_hints(pages, pathlib.Path(hints.replace("{slug}", slug)).expanduser())
     if labelled:
         used = f"page labels ({labelled} of {len(pages)} pages)"
     if report is not None:

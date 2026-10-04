@@ -15,7 +15,7 @@ import numpy as np
 from scipy import ndimage
 
 from .layout import ink_mask
-from .textutil import DIGITS, is_digits
+from .textutil import DIGITS, is_digits, to_int
 
 MARK = "\ue000"
 _READ = re.compile(rf"[{DIGITS}{MARK}*][.،؛:»)\]]*$")  # a word that ends in a marker already
@@ -104,12 +104,22 @@ def add_markers(layout, mask=None):
     if L.kind != "text" or not L.notes or not L.body:
         return 0
     added = 0
-    # marker lines: a raised digit boxed on its own, joined to the text line it sits on
-    small = [l for l in L.body if is_digits(l.text) and len(l.text) <= 2 and l.h < 0.6 * L.lh]
+    # marker lines: a raised number boxed on its own, joined to the text line it sits on: a low one of up to 2
+    # digits, or the very marker the page labeller saw there (up to 3 digits). Not 3-digit numbers on the rules'
+    # word alone: glued to line ends they make a text page look like a contents page (10 junk chapters in one book)
+    def marker_line(l):
+        t = l.text.strip()
+        if not is_digits(t) or len(t) > 3:
+            return False
+        return getattr(l, "markers", None) == [to_int(t)] or (len(t) <= 2 and l.h < 0.6 * L.lh)
+    small = [l for l in L.body if marker_line(l)]
     for s in small:
         host = [l for l in L.body if l is not s and l.y0 - 0.5 * l.h <= s.yc <= l.y0 + 0.5 * l.h and l.x0 - l.h <= s.x0 <= l.x1]
         if host:
-            _insert(host[0], (s.x0 + s.x1) / 2, s.text)
+            _insert(host[0], (s.x0 + s.x1) / 2, s.text.strip())
+            if getattr(s, "markers", None):  # the labeller's marker moves with it
+                hm = getattr(host[0], "markers", None) or []
+                host[0].markers = hm + [k for k in s.markers if k not in hm]
             L.body.remove(s)
             added += 1
     mask = ink_mask(L.page) if mask is None else mask

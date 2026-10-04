@@ -309,23 +309,34 @@ class Writer:
         return out_path
 
     def nav_file(self, spine):
-        items, part_open = [], None
+        items, part_open, opened_at = [], None, 0
+
+        def close_part():
+            if len(items) == opened_at:  # a part with no chapters under it: no empty <ol> (epubcheck RSC-005)
+                items[-1] = items[-1].removesuffix("<ol>") + "</li>"
+            else:
+                items.append("</ol></li>")
+
         for i, (title, href, sections, part) in enumerate(self.nav):
             if part != part_open:
                 if part_open:
-                    items.append("</ol></li>")
+                    close_part()
                 part_open = part
-                if part and part == title:  # the part's own title page
+                if part and part == title:  # the part's own title page, and the headings of its own text (a part
+                    # whose chapters are headings inside it would otherwise show no chapters at all)
                     items.append(f'<li><a href="{href}">{esc(part)}</a><ol>')
+                    opened_at = len(items)
+                    items += [f'<li><a href="{h}">{esc(t)}</a></li>' for t, h in sections]
                     continue
                 if part:
                     items.append(f"<li><span>{esc(part)}</span><ol>")
+                    opened_at = len(items)
             sub = ""
             if sections:
                 sub = "<ol>" + "".join(f'<li><a href="{h}">{esc(t)}</a></li>' for t, h in sections) + "</ol>"
             items.append(f'<li><a href="{href}">{esc(title)}</a>{sub}</li>')
         if part_open:
-            items.append("</ol></li>")
+            close_part()
         if not items:  # no chapters found: the book as one entry
             items.append(f'<li><a href="{spine[-1]}">{esc(self.meta.get("title", "متن"))}</a></li>')
         pages = "\n".join(f'<li><a href="{h}">{esc(label)}</a></li>' for label, h in self.pages)

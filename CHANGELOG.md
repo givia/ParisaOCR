@@ -1,10 +1,38 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 (2026-10-04)
 
+- **Cheaper labellers through OpenRouter:** `--gemini --gemini-model
+  openrouter:VENDOR/MODEL` asks an open model the same questions as Gemini,
+  for example `openrouter:qwen/qwen3.8-27b` or
+  `openrouter:google/gemma-4-31b-it` (key in `OPENROUTER_API_KEY` or
+  `~/.config/openrouter/api_key`). Requests go only to providers that keep no
+  data, take none for training and enforce the answer's format
+  (`PARISAOCR_OPENROUTER_PROVIDER` can name providers; it cannot weaken those
+  settings). Reasoning is switched off where it is optional, as for Gemini.
+- **Footnotes linked at their markers more often:** a marker the OCR read one
+  digit off ("۳۳" for ۳۲) is replaced instead of doubled (a number of the text
+  is left alone unless it is one digit off the marker and stands where a
+  marker stands), digits glued to the next word
+  are split, markers in list heads and chapter titles are linked, a raised
+  number boxed as its own line is joined to its line, and a false image mark
+  (a straight quote taken for a raised digit) no longer takes a note on a
+  labelled page. On 23 development books with Gemini labels: 325 of 343
+  footnotes linked after the right word, against 290 without these changes.
+- **Note numbers re-read from the image:** in the default path, footnote
+  numbers the line reader lost or cut ("10" for a raised "106") are re-read
+  from the image with the same model, its decoding limited to digits; a page
+  without numbered notes gets none. Cached with the OCR; `PARISAOCR_NOTENUM=0`
+  turns it off; if it fails, the book is converted without it. Plain OCR output
+  (`parisaocr ocr`) is unchanged from 0.4.0.
+- **The page labeller's prompt** says more sharply what a footnote, an endnote
+  and a reference are (models had called a page's own footnotes endnotes, and
+  citation footnotes references); `--gemini` answers are checked more strictly.
 - `parisaocr epub --gemini` prints what the book should cost before sending
-  anything (from the pages' OCR lines; within about 6% of the actual cost on
-  the books measured), and `--gemini-estimate` prints only that and stops.
+  anything (calibrated on Gemini, within about 6% on the books measured; a
+  rough guide for OpenRouter models), and `--gemini-estimate` prints only that.
+- Fixes: the EPUB's navigation has no empty lists and lists a part's sections
+  under the part; a part's page number is no longer negative.
 
 ## 0.4.0 (2026-10-03)
 

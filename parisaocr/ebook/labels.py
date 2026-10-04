@@ -21,6 +21,7 @@ at its head; other headings are section headings. The layout rules keep deciding
 import json
 import pathlib
 import re
+from difflib import SequenceMatcher
 
 from .notes import candidates
 from .textutil import DIGITS, ascii_digits, fa_num, is_digits, latin_ratio
@@ -29,8 +30,22 @@ DROP = ("header", "pagenum", "noise")
 _STARS = re.compile(r"^[\s\-–]*(\*{1,3})\s*(.*)$")
 _LEAD_NUMBER = re.compile(rf"^[\s'‘’“”\"(\[\-–.]*[{DIGITS}]{{1,3}}\s*[-–—.~):,،]?\s*")
 _LABEL = re.compile(r"^(فصل|بخش|قسمت|گفتار|دفتر|پیوست|ضمیمه|یادداشت|کتاب|پرده|درس)(\s|$)")
-_GLUED = re.compile(rf"(?<=[^\s{DIGITS}/\-(])([{DIGITS}]{{1,3}})(?=[\s.،؛:!?؟»«)\]]|$)")
+_GLUED = re.compile(rf"(?<=[^\s{DIGITS}/\-(])([{DIGITS}]{{1,3}})(?=[\s.،؛:!?؟»«)\]\u200c]|$)")
 _DIGIT_RUN = re.compile(rf"(?<=[^\s{DIGITS}])(\s?)([{DIGITS}]{{1,3}})(?![{DIGITS}])")  # digits after a word, maybe spaced
+_GLUED4 = re.compile(rf"(?<=[^\s{DIGITS}/\-(])([{DIGITS}]{{1,4}})(?=[\s.،؛:!?؟»«)\]°'‘’`\u200c]|$)")  # glued, up to 4 digits
+_LATIN_RUN = re.compile(r"[A-Za-z][A-Za-z\-]*")
+_JUNK_AFTER = re.compile(r"[°'‘’`]+")  # what the OCR makes of the rest of a raised number
+
+
+def _near(run, fk):
+    """RUN is FK read with one digit dropped, one changed, or one added after it."""
+    if len(run) == len(fk) - 1:
+        return any(fk[:i] + fk[i + 1:] == run for i in range(len(fk)))
+    if len(run) == len(fk) and len(fk) >= 2:
+        return sum(a != b for a, b in zip(run, fk)) == 1
+    if len(run) == len(fk) + 1:
+        return run.startswith(fk)
+    return False
 
 
 def _read(path):
@@ -85,10 +100,30 @@ def attach(pages, labels_dir):
         page = g.get("page") or {}
         p.label_type, p.label_pn = page.get("type", "other"), page.get("pn", "")
         p.label_toc = g.get("toc") or []
+        p.label_marker_words = bool(g.get("markers_with_words"))  # the labeller named the word each marker follows
+        restored = []
         for l in p.lines:
             it = g["lines"].get(l.row)
+            def foreign(jt):  # a margin mark, or the number of another note than the line's own
+                return jt.get("r") in ("header", "pagenum", "noise") or (
+                    jt.get("r") in ("note", "endnote") and jt.get("n") and it and it.get("n") and jt["n"] != it["n"])
+            if getattr(l, "unjoined", None) and any(foreign(g["lines"].get(jr) or {}) for jr in getattr(l, "joined", ())):
+                l.text, l.words, l.bbox, box = l.unjoined  # the box joined to it does not belong to it: both as read
+                l.joined = ()
+                restored.append(box)
+            for jr in getattr(l, "joined", ()):  # a note number source.join_number_boxes put into this line: its label
+                jt = g["lines"].get(jr)           # (a note starting, with its number) carries over
+                if jt and jt.get("r") in ("note", "endnote") and jt.get("n"):
+                    if it is None or it.get("r") not in ("note", "endnote"):
+                        it = dict(jt)
+                    elif not it.get("n"):
+                        it = dict(it, n=jt["n"])
             if it is not None:
                 _set(l, it, outline.get((p.index, l.row, -1)))
+        for box in restored:  # with its own label
+            p.lines.append(box)
+            if g["lines"].get(box.row) is not None:
+                _set(box, g["lines"][box.row], outline.get((p.index, box.row, -1)))
         by_row = {l.row: l for l in p.lines}
         for k, m in enumerate(g.get("missing") or []):
             if m.get("r") not in ("heading", "byline") or not (m.get("t") or "").strip():
@@ -118,6 +153,8 @@ def _set(l, it, final=None):
     l.note_num = int(num) if r in ("note", "endnote") and isinstance(num, int) and not isinstance(num, bool) else None
     l.para = bool(it.get("p"))
     l.markers = [int(k) for k in it.get("m") or [] if isinstance(k, int)]
+    words = it.get("a")
+    l.marker_words = [w for w in words if isinstance(w, str)] if isinstance(words, list) else []
     if r in ("heading", "byline") and (it.get("t") or "").strip():
         l.ocr_text, l.text = l.text, it["t"].strip()  # the labeller read the line as printed
     l.p_head = 1.0 if l.label_role == "heading" else 0.0
@@ -213,13 +250,21 @@ def split(lines):
 
 def marked_text(l):
     """The line's text with the note markers the labeller saw on it, as digits glued to the word they follow: a
-    marker the OCR read is left as it is; one it read in part ("۱۷" for "۱۷۶", a space before it) is completed; a
-    marker the image search found (MARK) takes the next number; the rest go at the end of the line."""
+    marker the OCR read is left as it is; one it read in part ("۱۷" for "۱۷۶", a space before it) is completed, and
+    split from a next word glued to it (after a Latin word glued to it, the marker goes after that word); one it
+    misread ("۳۳" for ۳۲, "۱۷" for ۱۰۷) is replaced, not doubled; a marker the image search found (MARK) takes the
+    next number; the rest go at the end of the line. Image marks left over go when the page's labels account for
+    all its notes (l.drop_marks, set by structure.text_page)."""
     from .markers import MARK  # not at the top: markers imports layout, which imports this module
     text, want = l.text, getattr(l, "markers", None)
     if not want or (is_digits(text.strip()) and [int(ascii_digits(text.strip()))] == want):
         return text  # no markers, or a marker the OCR boxed apart as a line of its own
-    pos = 0
+    words = getattr(l, "marker_words", None) or []
+    if len(words) == len(want):
+        placed = _place_after_words(text, want, words)
+        if placed is not None:
+            return placed
+    pos, tail = 0, []
     for k in want:
         fk = fa_num(k)
         glued = next((m for m in _GLUED.finditer(text, pos) if int(ascii_digits(m.group(1))) == k), None)
@@ -227,17 +272,172 @@ def marked_text(l):
             pos = glued.end()
             continue
         part = [m for m in _DIGIT_RUN.finditer(text, pos) if fk.startswith(m.group(2)) or fk.endswith(m.group(2))]
-        if part:
+        if part:  # read in part
             m = part[-1] if len(want) == 1 else part[0]
-            text = text[:m.start()] + fk + text[m.end():]
-            pos = m.start() + len(fk)
-        elif MARK in text[pos:]:
+            a, end = m.start(), m.end()
+            if a >= 1 and text[a - 1] == "(" and not text[end:].lstrip(DIGITS).startswith(")"):
+                a -= 1  # a "(" the OCR read before the raised digits
+                while a > 0 and text[a - 1] == " ":
+                    a -= 1
+            j = _JUNK_AFTER.match(text, end)
+            end = j.end() if j else end
+            after = text[end:]
+            lat = _LATIN_RUN.match(after)
+            if lat:  # "واژه۲M": the marker follows the Latin word glued to it
+                text = text[:a] + m.group(1) + lat.group(0) + fk + after[lat.end():]
+                pos = a + len(m.group(1)) + lat.end() + len(fk)
+                continue
+            sep = " " if after[:1].isalpha() else ""  # "نام۲سپس": the next word glued to the marker
+            text = text[:a] + fk + sep + after
+            pos = a + len(fk) + len(sep)
+            continue
+        # misread: a run one digit off the marker ("۳۳" for ۳۲, "۱۷" for ۱۰۷), glued to its word or set apart after
+        # closing punctuation or an image mark, and not part of a number of the text (after ":", ص, ج, ٪, or tied to
+        # other digits by , ٫ / -); nothing once a marker of the line had to be appended at its end
+        cand = None
+        if not tail:
+            runs = [(m.start(1), m.end(1)) for m in _GLUED4.finditer(text, pos)
+                    if int(ascii_digits(m.group(1))) not in want and _near(m.group(1), fk)]
+            runs += [(m.start(1), m.end(2)) for m in _DIGIT_RUN.finditer(text, pos)  # with its space: glued back
+                     if m.group(1) and text[:m.start()].rstrip()[-1:] in _CLOSE + MARK
+                     and int(ascii_digits(m.group(2))) not in want and _near(m.group(2), fk)]
+            runs = sorted(r for r in runs if _free_number(text, *r))
+            if runs:
+                cand = runs[0]
+        if cand is not None and MARK in text[pos:]:
+            # the image search found a mark on the line: a misread candidate wins only where a marker stands (after
+            # closing punctuation or the mark, or in the mark's word); a number of the running text does not
+            a, end = cand
+            lead = text[:a].rstrip(" ")[-1:]
+            w0, w1 = text.rfind(" ", 0, a + (text[a] == " ")) + 1, text.find(" ", end)
+            if lead not in _CLOSE + MARK and MARK not in text[w0:w1 if w1 >= 0 else None]:
+                cand = None
+        if cand is not None:
+            a, end = cand
+            j = _JUNK_AFTER.match(text, end)
+            end = j.end() if j else end
+            b = a
+            while b > 0 and text[b - 1] == " ":
+                b -= 1
+            if b > 0 and text[b - 1] == MARK:  # the image search's mark for this same marker, just before it
+                a, b = b - 1, b - 1
+                text = text[:a] + text[cand[0]:]
+                end -= cand[0] - a
+            sep = " " if text[end:end + 1].isalpha() else ""  # the next word glued to the misread marker
+            text = text[:a] + fk + sep + text[end:]
+            pos = a + len(fk) + len(sep)
+            continue
+        if MARK in text[pos:]:
             i = text.index(MARK, pos)
             text = text[:i] + fk + text[i + 1:]
             pos = i + len(fk)
-        else:
-            text = text.rstrip() + fk
-            pos = len(text)
+            continue
+        tail.append(fk)  # written at the line's end after the loop: a later marker may still be where the OCR read it
+    for fk in tail:
+        text = text.rstrip()
+        if text and text[-1] in DIGITS:
+            text += "\u200c"  # never glue a marker onto other digits
+        text += fk
+    if getattr(l, "drop_marks", False):
+        # the page's labels account for its notes: image marks left over are false, but only once every labelled
+        # marker of the line is one the linker will find (else a mark may be how it links)
+        from .structure import _MARKER, _marker_num  # not at the top: structure imports this module
+        if set(want) <= {_marker_num(m) for m in _MARKER.finditer(text.replace(MARK, ""))}:
+            text = text.replace(MARK, "")
+    return text
+
+
+_CLOSE = ".،؛:!?؟»)]\"'”’…"
+_NUMBER_JOIN = ",٫/-–—،."  # between two digit runs: one number of the text (4,4 ۱۸۰۱-۱۸۹۰ ۱۳۹۵/۹ ۵.۲)
+
+
+def _free_number(text, a, b):
+    """The digit run TEXT[a:b] stands alone: not after ":" (a page or verse reference), ص, ج, ٪ or %, and not tied to
+    other digits by , ٫ / or -."""
+    before, after = text[:a].rstrip(" "), text[b:].lstrip(" ")
+    if before[-1:] in (":", "ص", "ج", "٪", "%"):
+        return False
+    tied_before = len(before) >= 2 and before[-1] in _NUMBER_JOIN and before[-2] in DIGITS
+    tied_after = len(after) >= 2 and after[0] in _NUMBER_JOIN and after[1] in DIGITS
+    return not (tied_before or tied_after)
+_NORM = str.maketrans({"\u200c": None, "\u0640": None, "ي": "ی", "ى": "ی", "ك": "ک", "ة": "ه", "أ": "ا", "إ": "ا", "آ": "ا",
+                       **{chr(c): None for c in range(0x064B, 0x0653)}})  # ZWNJ, tatweel, letter variants, short vowels
+
+
+def _find_word(text, word, pos):
+    """(start, end) of WORD in TEXT at or after POS: as written, else with ZWNJ, short vowels and letter variants
+    ignored; None when it is not there."""
+    i = text.find(word, pos)
+    if i >= 0:
+        return i, i + len(word)
+    target = word.translate(_NORM)
+    if not target:
+        return None
+    norm, where = [], []  # the normalized text and, for each of its characters, its index in TEXT
+    for k in range(pos, len(text)):
+        c = text[k].translate(_NORM)
+        norm.append(c)
+        where += [k] * len(c)
+    j = "".join(norm).find(target)
+    return (where[j], where[j + len(target) - 1] + 1) if j >= 0 else None
+
+
+def _place_after_words(text, want, words):
+    """TEXT with each marker of WANT written right after the word the labeller said it follows (WORDS, in order):
+    after the word's closing punctuation, in place of digits the OCR glued or spaced there (the marker misread,
+    "۳۳" for ۳۲), split from a next word glued to it; other copies of the number glued elsewhere on the line go,
+    and so does the image search's mark for the same marker (in the word's token). Marks the image search found
+    elsewhere on the line stay: markers the labeller missed. None when a word is not found (the caller then falls
+    back on the OCR's digits)."""
+    from .markers import MARK
+    pos, spans = 0, []
+    for k, w in zip(want, words):
+        fk = fa_num(k)
+        glued = next((m for m in _GLUED.finditer(text, pos) if int(ascii_digits(m.group(1))) == k), None)
+        if glued is not None:  # the OCR read the marker glued to its word: more precise than a named word
+            spans.append((glued.start(), glued.end(), fk))
+            pos = glued.end()
+            continue
+        w = w.strip().strip(_CLOSE + "«(“‘[ ")  # the word alone: labellers often add its punctuation, in another form
+        if not w or is_digits(w):
+            return None  # no word, or the marker itself given as the word
+        hit = _find_word(text, w, pos)
+        if hit is None:
+            return None
+        e = hit[1]
+        t_end = e
+        while t_end < len(text) and not text[t_end].isspace():
+            t_end += 1
+        if MARK in text[e:t_end]:  # the image search found this same marker after the word
+            text = text[:e] + text[e:t_end].replace(MARK, "") + text[t_end:]
+        fk = fa_num(k)
+        p = hit[1]
+        q = p
+        while q < len(text) and text[q] in DIGITS:  # digits right after the word, before its punctuation
+            q += 1
+        if q == p:
+            while p < len(text) and text[p] in _CLOSE:
+                p += 1
+            q = p
+            if text[q:q + 1] == " " and q + 1 < len(text) and text[q + 1] in DIGITS:  # "گفت. ۱۷": spaced
+                r = q + 1
+                while r < len(text) and text[r] in DIGITS:
+                    r += 1
+                if r - q - 1 <= 4 and (r == len(text) or not text[r].isalpha()):
+                    q = r
+            while q < len(text) and text[q] in DIGITS:
+                q += 1
+        text = text[:p] + fk + text[q:]
+        end = p + len(fk)
+        if end < len(text) and text[end].isalpha():
+            text = text[:end] + " " + text[end:]  # "گفت.»۱۰۸سپس": the next word glued to the marker
+        spans.append((p, end, fk))
+        pos = end
+    placed = {fk for _, _, fk in spans}
+    cut = [m.span() for m in _GLUED.finditer(text)  # the same numbers glued elsewhere on the line: copies the OCR
+           if m.group(1) in placed and not any(a <= m.start() < b for a, b, _ in spans)]  # misplaced, cut from the end
+    for a, b in reversed(cut):
+        text = text[:a] + text[b:]
     return text
 
 
@@ -296,7 +496,14 @@ def openings(pages):
         if kind == "part":
             starts[n] = dict(kind="part", title=title, after_h2=[], bylines=[], rest=[])
             continue
-        starts[n] = dict(kind="chapter", title=title, label=label, title_lines=[], after_h2=after,
+        # a note marker on the unit's title: kept, so the displayed heading links the note, when the title lines are
+        # the whole title (a line the outline set to level 0 is gone from them: then the outline's title is shown)
+        marked = [l for l in title_lines if getattr(l, "markers", None)]
+        if marked and SequenceMatcher(None, _clean(" ".join(l.text for l in title_lines)), title).ratio() < 0.8:
+            marked = []
+        for l in marked:
+            l.text, l.markers = marked_text(l), []
+        starts[n] = dict(kind="chapter", title=title, label=label, title_lines=title_lines if marked else [], after_h2=after,
                          bylines=body[:first] + bylines, rest=body[first + len(run):])
     return starts
 

@@ -281,8 +281,12 @@ def parser():
                         "Gemini API key in GEMINI_API_KEY or ~/.config/gemini/api_key; the page images and their OCR text "
                         "are sent to Google; about $0.004-0.005 a page with the default model)")
     e.add_argument("--gemini-estimate", action="store_true",
-                   help="read the pages (locally), print what --gemini would cost for this book, and stop; nothing is sent")
-    e.add_argument("--gemini-model", default="gemini-3.8-flash", metavar="MODEL", help="Gemini model (default %(default)s)")
+                   help="read the pages (locally), print what --gemini would cost for this book, and stop; nothing is "
+                        "sent (calibrated on Gemini; for openrouter: models a rough guide)")
+    e.add_argument("--gemini-model", default="gemini-3.8-flash", metavar="MODEL",
+                   help="the labeller: a Gemini model (default %(default)s), or openrouter:VENDOR/MODEL for a model asked "
+                        "through OpenRouter, e.g. openrouter:google/gemma-4-31b-it (key in OPENROUTER_API_KEY or "
+                        "~/.config/openrouter/api_key; only providers that keep no data are used)")
     e.add_argument("--gemini-jobs", type=int, default=8, metavar="N", help="pages asked at the same time (default %(default)s)")
     e.add_argument("--labels", metavar="DIR",
                    help="a page labeller's labels (p-NNN.json, book_outline.json, book_meta.json, as --gemini writes "

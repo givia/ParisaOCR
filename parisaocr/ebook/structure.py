@@ -106,7 +106,7 @@ class Book:
 
 # ---- helpers ----------------------------------------------------------------------------------
 
-_MARKER = re.compile(rf"(?<=[^\s{DIGITS}/\-(])([{DIGITS}]{{1,3}})(?=[\s.،؛:!?؟»«)\]]|$)"
+_MARKER = re.compile(rf"(?<=[^\s{DIGITS}/\-(])([{DIGITS}]{{1,3}})(?=[\s.،؛:!?؟»«)\]\u200c]|$)"
                      rf"|(?<=[^\s*])(\*{{1,3}})(?=[\s.،؛:!?؟»«)\]]|$)|{MARK}"
                      # loose: a marker the OCR set apart from its word, "کرمچاله‌ها ۱،", "گردید. ۱۵۲ مدّتی"; taken only
                      # when the page has an unlinked note with that number
@@ -585,6 +585,17 @@ class Assembler:
 
     # -- a text page --
     def text_page(self, L, n, lines):
+        if getattr(L, "labelled", False):
+            # when the labeller's markers (with the notes already linked) account for every note of the page, a mark
+            # the image search found elsewhere is a false one (a straight quote taken for a raised digit): it goes
+            notes = self.notes_by_page.get(n, {})
+            wanted = {k for l in list(L.body) + list(lines) for k in (getattr(l, "markers", None) or [])}
+            wanted |= {k for k, note in notes.items() if note.linked}
+            gate = bool(notes) and set(notes) <= wanted
+            for l in lines:
+                l.drop_marks = gate
+                if gate and getattr(l, "label_role", None) is not None and not getattr(l, "markers", None) and MARK in l.text:
+                    l.text = l.text.replace(MARK, "")
         for l in lines:  # the note markers a page labeller saw, written into the text where the OCR lost them
             if getattr(l, "markers", None):
                 l.text, l.markers = labels_mod.marked_text(l), []
@@ -773,7 +784,11 @@ class Assembler:
         for h in heads:
             ltr = latin_ratio(h.text) > 0.5
             self.close_para()
-            self.para = Block("bib", [], ltr, lead=h.text.strip())
+            items = self.inline(h.text.strip(), n, ltr)
+            if any(isinstance(x, NoteRef) for x in items):  # the head carries a note marker: linked, as running text
+                self.para = Block("bib", items + [" "], ltr)
+            else:
+                self.para = Block("bib", [], ltr, lead=h.text.strip())
             prev = None
             for t in sorted(owner.get(id(h), []), key=lambda l: l.y0):
                 gap = ((prev.x0 - edge_l) if rtl_text else (edge_r - prev.x1)) if prev is not None else 0
@@ -829,7 +844,8 @@ class Assembler:
             lines = L.body
             if n in starts and starts[n]["kind"] == "part":
                 self.new_chapter(starts[n]["title"], n, kind="part")
-                self.add(Block("mark", [PageMark(n)]))
+                if n >= 1:  # as for text pages below: a page before the first printed number has none to mark
+                    self.add(Block("mark", [PageMark(n)]))
                 continue
             if n in starts:
                 s = starts[n]

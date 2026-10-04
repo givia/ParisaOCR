@@ -77,6 +77,31 @@ NAMES = [
     "rule_above", "rule_len", "rules_above",
     "tail_small", "small_run_up",
 ]
+# Version 2 features, after NAMES (models trained on NAMES alone still find their columns by name):
+#   the text as character 2- and 3-grams hashed into buckets (digits all "0", so «۱۷)» and «۲۳)» look alike) for the
+#   whole line, its first word and its last word; character classes and ends; the box against the page's text block
+#   (the column of its ordinary lines) instead of the page; two neighbours each way (the word boxes are not used:
+#   the kraken reader's run from space to space at the line's full height, so their gaps and sizes say nothing);
+#   and the line in its book: size rank, how many lines share its style, how many headings-like lines share its first
+#   word, how close it is to an entry of the printed contents.
+NGRAM_BUCKETS, WORD_BUCKETS = 256, 64
+TEXT2 = ["fa_share", "punct_share", "diacritic_share", "bracket_share", "quote_start", "quote_end", "colon_in",
+         "ends_colon", "ends_comma", "ends_stop", "has_year", "first_word_len", "last_word_len"]
+BLOCK2 = ["ind_r", "short_l", "c_col", "fill"]
+NEIGHBOUR2 = ["prev2_h_book", "next2_h_book", "prev_ind_r", "next_ind_r", "prev_fill", "next_fill",
+              "prev_ends_punct", "next_ends_punct", "prev_gap_up", "next_gap_down"]
+BOOK2 = ["size_rank", "style_n", "fw_n", "fw_heads", "toc_sim", "on_toc_page"]
+NAMES2 = (TEXT2 + BLOCK2 + NEIGHBOUR2 + BOOK2 + [f"g{k}" for k in range(NGRAM_BUCKETS)]
+          + [f"fw{k}" for k in range(WORD_BUCKETS)] + [f"lw{k}" for k in range(WORD_BUCKETS)])
+ALL_NAMES = NAMES + NAMES2
+# Version 3: the text model's opinion (TextModel: a linear model over hashed character pieces of the line's text,
+# trained on the same labels), stacked under the trees: its probability for each role, and for the neighbours'
+# heading and note probabilities. The class order is the text model's (ROLE_CLASSES).
+ROLE_CLASSES = ["header", "pagenum", "heading", "body", "quote", "verse", "note", "endnote", "caption", "table", "figure",
+                "contents", "other"]
+TEXT3 = [f"t_{c}" for c in ROLE_CLASSES] + ["prev_t_heading", "next_t_heading", "prev_t_note", "next_t_note",
+                                             "prev_t_body", "next_t_body"]
+ALL_NAMES3 = ALL_NAMES + TEXT3
 # model file -> Line attribute: the role name, P(footnote), P(heading), P(starts a note), heading level
 MODELS = [("role", "role"), ("note", "p_note"), ("heading", "p_head"), ("start", "p_start"), ("level", "level")]
 
@@ -126,6 +151,129 @@ def text_features(text):
         "is_number_only": int(bool(rest) and all(c in DIGIT_SET for c in rest)),
         "star_start": int(bool(RE_STAR.match(t))),
     }
+
+
+RE_DIACRITIC = re.compile("[ً-ْٰ]")
+RE_YEAR = re.compile(r"(?<![0-9۰-۹])(1[2-4]|19|20)[0-9]{2}(?![0-9])|(?<![0-9۰-۹])(۱[۲-۴]|۱۹|۲۰)[۰-۹]{2}(?![۰-۹])")
+DIGIT_TO_0 = str.maketrans({c: "0" for c in DIGITS})
+RE_TOC_ENTRY = re.compile(r"^.*\D[\s.…_\-–—]*[0-9۰-۹]{1,4}[\s.]*$")  # text, then one page number at the end
+RE_NUMBER = re.compile(r"[0-9۰-۹]+")
+
+
+def _norm_grams(text):
+    """The text for the n-grams: ي/ك -> ی/ک, digits -> 0, vowel marks dropped, half-space as a space."""
+    return " ".join(RE_DIACRITIC.sub("", (text or "").translate(ARABIC_MAP).translate(DIGIT_TO_0)).replace("‌", " ").split())
+
+
+def _bucket(gram, n):
+    import zlib
+    return zlib.crc32(gram.encode("utf-8")) % n
+
+
+def gram_counts(text, n):
+    """Counts of the character 2- and 3-grams of TEXT (with "^"/"$" at its ends) hashed into N buckets."""
+    out = [0] * n
+    t = f"^{text}$"
+    for size in (2, 3):
+        for i in range(len(t) - size + 1):
+            out[_bucket(t[i:i + size], n)] += 1
+    return out
+
+
+def text2_features(text):
+    t = " ".join((text or "").split())
+    ns = t.replace(" ", "")
+    n = len(ns) or 1
+    words = t.split()
+    return {
+        "fa_share": sum("ء" <= c <= "ي" or c in "پچژکگی" for c in ns) / n,
+        "punct_share": sum(c in ".,،؛:!?؟…-–—/\\" for c in ns) / n,
+        "diacritic_share": len(RE_DIACRITIC.findall(ns)) / n,
+        "bracket_share": sum(c in "()[]{}" for c in ns) / n,
+        "quote_start": int(t[:1] in ("«", '"', "“")),
+        "quote_end": int(t[-1:] in ("»", '"', "”")),
+        "colon_in": int(":" in t),
+        "ends_colon": int(t.endswith(":")),
+        "ends_comma": int(t[-1:] in ("،", ",")),
+        "ends_stop": int(t[-1:] in (".", "؟", "?", "!")),
+        "has_year": int(bool(RE_YEAR.search(t))),
+        "first_word_len": len(words[0]) if words else 0,
+        "last_word_len": len(words[-1]) if words else 0,
+    }
+
+
+TEXT_BUCKETS = 1 << 17
+
+
+def text_tokens(text):
+    """The hashed pieces of a line's text for the text model: for every word (normalised as for the n-grams: digits
+    0, ي/ك -> ی/ک, no vowel marks, half-space a space) its character 2- to 4-grams with "<" and ">" at its ends and
+    the word itself, plus the first and the last word marked as such. -> bucket indices (with repeats)."""
+    import zlib
+    words = _norm_grams(text).split()
+    toks = []
+    for w in words:
+        t = f"<{w}>"
+        toks += [t[i:i + n] for n in (2, 3, 4) for i in range(len(t) - n + 1)]
+        toks.append("W:" + w)
+    if words:
+        toks += ["F:" + words[0], "L:" + words[-1], "N:" + str(min(len(words), 12))]
+    else:
+        toks.append("EMPTY")
+    return [zlib.crc32(x.encode("utf-8")) % TEXT_BUCKETS for x in toks]
+
+
+class TextModel:
+    """A linear text classifier exported by the training repo (text.npz: W [TEXT_BUCKETS, classes] as float16, b,
+    classes): softmax(b + sum of W rows of the line's pieces, the counts L2-normalised)."""
+
+    def __init__(self, path):
+        d = np.load(path, allow_pickle=False)
+        self.W, self.b = d["W"].astype(np.float32), d["b"].astype(np.float32)
+        self.classes = [str(c) for c in d["classes"]]
+
+    def proba(self, texts):
+        out = np.zeros((len(texts), len(self.classes)), np.float32)
+        for k, t in enumerate(texts):
+            idx, cnt = np.unique(np.array(text_tokens(t), np.int64), return_counts=True)
+            v = cnt.astype(np.float32)
+            v /= max(1e-6, float(np.sqrt((v * v).sum())))
+            out[k] = self.b + v @ self.W[idx]
+        out -= out.max(axis=1, keepdims=True)
+        np.exp(out, out=out)
+        return out / out.sum(axis=1, keepdims=True)
+
+
+def text_columns(index, probs, classes):
+    """The TEXT3 columns for the rows of `features` (INDEX, in its order) from the text model's PROBS [n, classes]:
+    the line's own probabilities in ROLE_CLASSES order, and its neighbours' (by y on the page) heading, note and body
+    probabilities (-1 at the page's edge)."""
+    col = {c: k for k, c in enumerate(classes)}
+    own = np.stack([probs[:, col[c]] if c in col else np.zeros(len(probs), np.float32) for c in ROLE_CLASSES], axis=1)
+    out = np.full((len(index), len(TEXT3)), -1.0, np.float32)
+    out[:, :len(ROLE_CLASSES)] = own
+    by_page = {}
+    for k, (p, l) in enumerate(index):
+        by_page.setdefault(id(p), []).append(k)
+    hk, nk, bk = ROLE_CLASSES.index("heading"), ROLE_CLASSES.index("note"), ROLE_CLASSES.index("body")
+    base = len(ROLE_CLASSES)
+    for ks in by_page.values():
+        ks = sorted(ks, key=lambda k: index[k][1].y0)
+        for j, k in enumerate(ks):
+            for off, (prev_col, next_col) in ((0, (hk, hk)), (2, (nk, nk)), (4, (bk, bk))):
+                if j:
+                    out[k, base + off] = own[ks[j - 1], prev_col]
+                if j + 1 < len(ks):
+                    out[k, base + off + 1] = own[ks[j + 1], next_col]
+    return out
+
+
+def _letters(text):
+    return "".join(c for c in (text or "").translate(ARABIC_MAP) if c.isalpha())
+
+
+def _trigrams(s):
+    return {s[i:i + 3] for i in range(len(s) - 2)} if len(s) >= 3 else ({s} if s else set())
 
 
 def ink_features(dark, bbox, W, H):
@@ -203,12 +351,16 @@ def rule_features(dark, boxes, W, H):
     return out
 
 
-def features(pages, image_of=None):
+def features(pages, image_of=None, names=None, text_model=None):
     """The features of every line of every page: (NAMES, X float32 [n, len(NAMES)], [(page, line)] per row).
     PAGES as `source.load` gives them, IMAGE_OF(page) the page's PNG (None: page.image; a page whose image is
     gone gets -1 in the ink and rule columns). Rows come in the pages' order and, within a page, in the page's
     line order; a page without lines gives none."""
     image_of = image_of or (lambda page: page.image)
+    cols = list(names or ALL_NAMES)  # NAMES alone skips the version 2 columns (the shipped models need only those)
+    want3 = any(c in TEXT3 for c in cols)
+    if want3 and text_model is None:
+        raise ValueError("the TEXT3 columns need a text model (text.npz)")
     n_pages = max((p.index for p in pages), default=0)
     # Pass 1, one image decode per page: ink and rules per line, the lines sorted by y.
     recs = []
@@ -234,7 +386,7 @@ def features(pages, image_of=None):
                 r.update(rule_above=above, rule_len=length, rules_above=n_above)
         recs.append({"page": p, "W": W, "H": H, "srt": srt, "first_y": srt[0]["line"].y0 / H})
     if not recs:
-        return list(NAMES), np.zeros((0, len(NAMES)), np.float32), []
+        return cols, np.zeros((0, len(cols)), np.float32), []
     # Book-level statistics.
     heights = [r["h"] for q in recs for r in q["srt"] if r["conf"] >= 70] or [r["h"] for q in recs for r in q["srt"]]
     med_book = float(np.median(heights)) or 1.0
@@ -282,10 +434,103 @@ def features(pages, image_of=None):
         for k in range(n - 1, -1, -1):
             tail += int(small[k])
             feats[k]["tail_small"] = tail / (n - k)
-        for r, d in sorted(zip(srt, feats), key=lambda rd: rd[0]["idx"]):
-            X.append([d[c] for c in NAMES])
+        q["feats"] = feats
+    if any(c in NAMES2 for c in cols):
+        book_features(recs, med_book)
+    base = [c for c in cols if c not in TEXT3]
+    for q in recs:
+        for r, d in sorted(zip(q["srt"], q["feats"]), key=lambda rd: rd[0]["idx"]):
+            X.append([d[c] for c in base])
             index.append((q["page"], r["line"]))
-    return list(NAMES), np.array(X, dtype=np.float32), index
+    X = np.array(X, dtype=np.float32)
+    if want3:
+        tm = text_model if isinstance(text_model, TextModel) else TextModel(text_model)
+        T = text_columns(index, tm.proba([l.text for _, l in index]), tm.classes)
+        full = {c: X[:, k] for k, c in enumerate(base)}
+        full.update({c: T[:, k] for k, c in enumerate(TEXT3)})
+        X = np.stack([full[c] for c in cols], axis=1).astype(np.float32) if len(index) else np.zeros((0, len(cols)), np.float32)
+    return cols, X, index
+
+
+def book_features(recs, med_book):
+    """The version 2 columns (NAMES2) of every line, in place: they need the whole book (the text block, the size
+    distribution, the styles, the printed contents) as well as the line."""
+    lines = [(q, r, d) for q in recs for r, d in zip(q["srt"], q["feats"])]
+    for q, r, d in lines:
+        l = r["line"]
+        d.update(text2_features(l.text))
+        g = _norm_grams(l.text)
+        words = g.split()
+        for k, v in enumerate(gram_counts(g, NGRAM_BUCKETS)):
+            d[f"g{k}"] = v
+        for prefix, w in (("fw", words[0] if words else ""), ("lw", words[-1] if words else "")):
+            for k, v in enumerate(gram_counts(w, WORD_BUCKETS) if w else [0] * WORD_BUCKETS):
+                d[f"{prefix}{k}"] = v
+    # the text block: the column of a page's ordinary lines (long, body-sized), else the book's
+    def ordinary(d):
+        return d["n_chars"] >= 20 and 0.8 <= d["h_book"] <= 1.25
+    book_l = [d["x0"] for _, _, d in lines if ordinary(d)] or [d["x0"] for _, _, d in lines]
+    book_r = [d["x1"] for _, _, d in lines if ordinary(d)] or [d["x1"] for _, _, d in lines]
+    bl, br = float(np.median(book_l)), float(np.median(book_r))
+    for q in recs:
+        o = [d for d in q["feats"] if ordinary(d)]
+        cl, cr = (float(np.median([d["x0"] for d in o])), float(np.median([d["x1"] for d in o]))) if len(o) >= 3 else (bl, br)
+        if cr - cl < 0.85 * (br - bl):  # a ragged page (contents, a list, a left-to-right bibliography): the book's block
+            cl, cr = bl, br
+        cw = max(1e-6, cr - cl)
+        for d in q["feats"]:
+            d["ind_r"] = (cr - d["x1"]) / cw
+            d["short_l"] = (d["x0"] - cl) / cw
+            d["c_col"] = ((d["x0"] + d["x1"]) / 2 - (cl + cr) / 2) / cw
+            d["fill"] = (d["x1"] - d["x0"]) / cw
+        feats, n = q["feats"], len(q["feats"])
+        for k, d in enumerate(feats):
+            d["prev2_h_book"] = feats[k - 2]["h_book"] if k >= 2 else -1
+            d["next2_h_book"] = feats[k + 2]["h_book"] if k + 2 < n else -1
+            for prefix, nb in (("prev_", feats[k - 1] if k else None), ("next_", feats[k + 1] if k + 1 < n else None)):
+                for name in ("ind_r", "fill", "ends_punct"):
+                    d[prefix + name] = nb[name] if nb is not None else -1
+            d["prev_gap_up"] = feats[k - 1]["gap_up"] if k else -1
+            d["next_gap_down"] = feats[k + 1]["gap_down"] if k + 1 < n else -1
+    # the line in its book
+    hs = np.sort([r["h"] for _, r, _ in lines])
+    style = Counter()
+    keys = []
+    for q, r, d in lines:
+        key = (round(d["h_book"] * 10), round(d["ink_core"] * 20) if d["ink_core"] >= 0 else -1,
+               abs(d["c_col"]) < 0.08, d["fill"] < 0.75)
+        keys.append(key)
+        style[key] += 1
+    first = [(_letters(r["line"].text.split()[0]) if r["line"].text.split() else "") for _, r, _ in lines]
+    headlike = [d["h_book"] >= 1.1 or (abs(d["c_col"]) < 0.08 and d["fill"] < 0.75) for _, _, d in lines]
+    fw_n, fw_heads = Counter(first), Counter(w for w, hl in zip(first, headlike) if hl)
+    # the printed contents: pages of 5+ lines of which 40%+ are entries — letters followed by one page number
+    # (an index line ends with several numbers, "۱۲، ۴۵، ۶۷"); the entries' text without the number
+    toc_pages, entries = set(), []
+    for q in recs:
+        texts = [r["line"].text.strip() for r in q["srt"]]
+        is_entry = [bool(RE_TOC_ENTRY.match(t)) and len(_letters(t)) >= 3 and len(RE_NUMBER.findall(t)) <= 2 for t in texts]
+        if len(texts) >= 5 and sum(is_entry) >= 0.4 * len(texts):
+            toc_pages.add(id(q))
+            for t, ok in zip(texts, is_entry):
+                if ok:
+                    entries.append(_trigrams(_letters(RE_DIGIT.sub("", t))))
+    post = {}
+    for j, e in enumerate(entries):
+        for g in e:
+            post.setdefault(g, []).append(j)
+    for (q, r, d), key, w, in zip(lines, keys, first):
+        d["size_rank"] = float(np.searchsorted(hs, r["h"], side="right")) / len(hs)
+        d["style_n"] = math.log1p(style[key])
+        d["fw_n"] = math.log1p(fw_n[w]) if w else 0.0
+        d["fw_heads"] = math.log1p(fw_heads[w]) if w else 0.0
+        d["on_toc_page"] = int(id(q) in toc_pages)
+        if id(q) in toc_pages or not entries:
+            d["toc_sim"] = -1.0
+        else:
+            tg = _trigrams(_letters(r["line"].text))
+            inter = Counter(j for g in tg for j in post.get(g, ()))
+            d["toc_sim"] = max((c / (len(tg) + len(entries[j]) - c) for j, c in inter.items()), default=0.0)
 
 
 class Forest:
@@ -353,30 +598,34 @@ def annotate(pages, image_of=None, model_dir=BUNDLED):
     in MODEL_DIR (role.npz, note.npz, heading.npz, start.npz, level.npz) to every Line: role (the 13-class
     role's name), p_note, p_head, p_start (probabilities), level (1-3, for every line; 0 when there is no level
     model). A missing model leaves its attribute unset, with a warning. -> lines annotated."""
-    names, X, index = features(pages, image_of)
+    model_dir = pathlib.Path(model_dir)
+    forests = {name: Forest(model_dir / f"{name}.npz") for name, _ in MODELS if (model_dir / f"{name}.npz").exists()}
+    need = set().union(*(m.names for m in forests.values())) if forests else set()
+    if need & set(TEXT3):
+        names, X, index = features(pages, image_of, ALL_NAMES3, text_model=model_dir / "text.npz")
+    else:
+        names, X, index = features(pages, image_of, NAMES if need <= set(NAMES) else ALL_NAMES)
     if not index:
         return 0
-    model_dir = pathlib.Path(model_dir)
     for name, attr in MODELS:
         path = model_dir / f"{name}.npz"
-        if not path.exists():
+        if name not in forests:
             print(f"parisaocr: no {path}: line.{attr} {'is 0' if name == 'level' else 'not set'}", file=sys.stderr)
             if name == "level":
                 for _, l in index:
                     l.level = 0
             continue
-        m = Forest(path)
-        if m.names != names:
-            missing, extra = [n for n in m.names if n not in names], [n for n in names if n not in m.names]
-            raise ValueError(f"{path} was trained on {len(m.names)} features, this code computes {len(names)}: "
-                             + (f"not computed here {missing}; not in the model {extra}" if missing or extra
-                                else "the same names in a different order") + "; retrain the models")
+        m = forests[name]
+        missing = [n for n in m.names if n not in names]
+        if missing:
+            raise ValueError(f"{path} was trained on features this code does not compute: {missing}; retrain the models")
+        Xm = X[:, [names.index(n) for n in m.names]]  # the model's columns, by name (version 1 models: the first 46)
         if name == "role":
-            vals = [m.labels[int(c)] for c in m.predict(X)]
+            vals = [m.labels[int(c)] for c in m.predict(Xm)]
         elif name == "level":
-            vals = [int(v) for v in m.predict(X)]
+            vals = [int(v) for v in m.predict(Xm)]
         else:
-            vals = m.proba(X)[:, m.classes.index(1)].tolist()
+            vals = m.proba(Xm)[:, m.classes.index(1)].tolist()
         for (_, l), v in zip(index, vals):
             setattr(l, attr, v)
     return len(index)

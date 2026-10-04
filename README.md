@@ -95,7 +95,9 @@ much better. What it builds:
   or a `--meta` JSON file; with `--gemini` they, and the translators and
   editors, are read from the cover, title and copyright pages.
 
-`out/book.report.md` lists what was decided and where to look first: pages
+Footnote numbers the OCR lost or cut are re-read from the page image
+(`PARISAOCR_NOTENUM=0` turns this off). `out/book.report.md` lists what was
+decided and where to look first: pages
 read with low confidence, notes whose marker was not found, contents entries
 not found as chapters. The OCR is kept in `out/book.work`, so a second run
 takes seconds. Set `EPUBCHECK_JAR` to an epubcheck jar to have the result
@@ -107,7 +109,7 @@ what each line is: a chapter or section heading, a footnote or endnote, a
 running header, a byline, and so on. It then decides the book's outline from
 all the headings found and reads the title, authors, translators and publisher
 from the cover, title and copyright pages. On 10 test books that played no
-part in the development:
+part in the development (measured with 0.4.0):
 
 |                              | chapters found | of those right | footnotes found | of those right |
 |------------------------------|---------------:|---------------:|----------------:|---------------:|
@@ -125,6 +127,33 @@ answers are kept in `out/book.work/gemini-…`, so later runs and `--review`
 rebuilds cost nothing.
 The page images and their OCR text are sent to Google; without `--gemini`
 nothing leaves your machine.
+
+**Cheaper models through OpenRouter.** `--gemini --gemini-model openrouter:VENDOR/MODEL`
+asks the same questions to an open model served by
+[OpenRouter](https://openrouter.ai) (key in `OPENROUTER_API_KEY` or
+`~/.config/openrouter/api_key`). Only providers that keep no data, take none
+for training and enforce the answer's format are used. On two of our
+development books with many footnotes (326 pages, 64 footnotes checked):
+
+| `--gemini-model`                       | chapters found | extra chapters | footnotes right¹ | 300-page book |
+|----------------------------------------|---------------:|---------------:|-----------------:|--------------:|
+| `gemini-3.8-flash` (default)           | 17 of 17       | 0              | 92%              | about $1.25   |
+| `openrouter:qwen/qwen3.8-27b`          | 17 of 17       | 0              | 79% (85%²)       | about $0.50   |
+| `openrouter:google/gemma-4-31b-it`     | 17 of 17       | 2              | 88%              | about $0.15   |
+
+¹ found with the right number and linked after the right word. ² with one
+provider for every page, `PARISAOCR_OPENROUTER_PROVIDER='{"order":
+["deepinfra/bf16"]}'`; by default OpenRouter spreads pages over several
+providers, and their answers differ. Two books are too few to rank models
+closely; the Gemini figures above for 10 test books are the measured ones.
+`PARISAOCR_OPENROUTER_PROVIDER` is OpenRouter's `provider` object as JSON: it
+can name providers or exclude some, and add to the privacy settings, not
+weaken them. The cost estimate is calibrated on Gemini and only a rough guide
+for these models. Gemma 4 31B is also free from Google with a Gemini key
+(`--gemini --gemini-model gemma-4-31b-it --gemini-jobs 2`), but limited to
+16,000 input tokens a minute: about 6 pages a minute, 50 minutes for a
+300-page book; with more jobs Google refuses requests and the run stops after
+a few dozen pages (running it again continues).
 
 **Three minutes of your own marking make the chapters right whatever the
 scan,** with or without Gemini. `--review` opens a local page (127.0.0.1,
@@ -287,6 +316,13 @@ parisaocr epub book.pdf --out out --review      # سپس علامت‌گذاری
 کتاب چاپ می‌شود، و با `--gemini-estimate` فقط همین برآورد را می‌بینید و چیزی فرستاده نمی‌شود.
 پاسخ‌ها نگه داشته می‌شوند، پس اجرای دوباره هزینه‌ای ندارد. با این گزینه تصویر صفحه‌ها و متن اوسی‌آر به گوگل فرستاده می‌شود؛
 بدون آن هیچ چیز از رایانهٔ شما بیرون نمی‌رود.
+
+مدل‌های ارزان‌تر از راه OpenRouter: با `--gemini --gemini-model openrouter:qwen/qwen3.8-27b` (حدود
+۰٫۵ دلار برای کتابی ۳۰۰ صفحه‌ای) یا `--gemini --gemini-model openrouter:google/gemma-4-31b-it` (حدود ۰٫۱۵
+دلار) همین پرسش‌ها از یک مدل باز پرسیده می‌شود. کلید را در `OPENROUTER_API_KEY` یا فایل
+`~/.config/openrouter/api_key` بگذارید. فقط ارائه‌دهنده‌هایی به کار می‌روند که داده‌ای نگه
+نمی‌دارند و برای آموزش استفاده نمی‌کنند. روی دو کتاب پرپانویس، هر دو مدل همهٔ فصل‌ها را پیدا
+کردند و ۷۹ تا ۸۸ درصد پانویس‌ها را درست پیوند دادند (Gemini: ۹۲ درصد).
 
 با `--review` صفحه‌ای در مرورگر خودتان باز می‌شود که همهٔ صفحه‌های کتاب را کوچک و به
 ترتیب نشان می‌دهد. آغاز بخش‌ها، فصل‌ها و زیربخش‌ها و عنوانشان را درست کنید و کتاب را
