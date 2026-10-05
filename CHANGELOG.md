@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.0 (2026-10-05)
+
+- **`parisaocr app`: the whole process in the browser.** A local page
+  (127.0.0.1 only) for books to EPUB, OCR to text, hOCR, JSONL and searchable
+  PDF, and page images. Drop the files or give their paths, set any option of
+  `ocr`, `epub` and `pages` (the form is built from the command line's own
+  options and shows the equivalent command), and follow each step's progress.
+  Then preview the EPUB, read its report, open the chapter review, see each
+  page's image next to its text, and download the results. A book whose
+  structure a language model decides stops after the OCR with the expected
+  cost and sends nothing until that is agreed to. API keys can be saved from
+  the page. Jobs are kept in `~/ParisaOCR` (`--home`), run one at a time, can
+  be cancelled and resumed, and run the same commands as the command line.
+  Persian and English.
+- With `PARISAOCR_PROGRESS=1` the commands also print `@progress` JSON lines
+  on stderr, which the app reads; without it their output is unchanged.
+- The review page answers only requests addressed to 127.0.0.1 or localhost.
+
 ## 0.5.1 (2026-10-04)
 
 - **The labeller's options are renamed:** `--llm` (Gemini 3.8 Flash) or

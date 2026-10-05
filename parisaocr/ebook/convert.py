@@ -13,6 +13,7 @@ import sys
 import time
 
 from . import epub, labels, layout, marks as marks_mod, order, refine, report, source, structure
+from .. import progress
 
 EPUBCHECK = os.environ.get("EPUBCHECK_JAR", "")
 
@@ -73,6 +74,7 @@ def convert(opts, read, marks=None):
             print(f"parisaocr: note numbers not re-read ({type(e).__name__}: {str(e)[:200]}); converting without them",
                   flush=True)
     print("parisaocr: page layout", flush=True)
+    progress.emit("layout")
     ps = source.load(ocr_dir)
     latin = sum(l.latin for p in ps for l in p.lines)
     marks_path = marks_mod.path_for(out, name)
@@ -91,6 +93,7 @@ def convert(opts, read, marks=None):
     markers = sum(refine.refine(L) for L in layouts)
     ordered = order.order(layouts)
     print("parisaocr: book structure", flush=True)
+    progress.emit("structure")
     book = structure.build(ordered, marks)
 
     meta = json.loads(pathlib.Path(opts.meta).expanduser().read_text(encoding="utf-8")) if opts.meta else {}
@@ -107,6 +110,7 @@ def convert(opts, read, marks=None):
     if not meta.get("title"):
         front = next((b.rows[0] for ch in book.chapters if ch.kind == "front" for b in ch.blocks if b.kind == "lines" and b.rows), None)
         meta["title"] = front or pdf.stem
+    progress.emit("epub")
     path = epub.write(book, out / f"{name}.epub", meta, tables=opts.tables)
     print(f"parisaocr: EPUB -> {path}", flush=True)
     check = epubcheck(path)
@@ -116,6 +120,7 @@ def convert(opts, read, marks=None):
         marks=len(marks["pages"]) if marks and marks.get("reviewed") else 0,
         model=f"{ocr_dir.name.removeprefix('ocr-')} ({opts.model})"))
     (out / f"{name}.report.md").write_text(text, encoding="utf-8")
+    progress.emit("report", epub=path, report=out / f"{name}.report.md", title=meta["title"])
     print(f"parisaocr: report -> {out / f'{name}.report.md'} (pages and notes to check first)\nparisaocr: epubcheck: {check}")
     summary = "\n".join(l.lstrip("- ") for l in text.splitlines() if l.startswith(("- Structure", "- ")) and ("chapters," in l or "Structure" in l))
     return dict(epub=path, report=out / f"{name}.report.md", summary=summary, title=meta["title"], book=book,

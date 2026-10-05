@@ -18,7 +18,7 @@ The recognition model and the detector are replaceable (`--model`, `--detector`)
 Tesseract models and the Surya detector are supported for comparison, and
 `parisaocr cut` cuts the lines of scanned books for building training data.
 """
-__version__ = "0.5.1"
+__version__ = "0.6.0"
 
 
 def __getattr__(name):  # the interface imports torch and Kraken; only load them when asked for

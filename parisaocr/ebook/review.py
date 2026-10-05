@@ -13,6 +13,7 @@ The server binds 127.0.0.1 only: the page images never leave the machine.
 import http.server
 import io
 import json
+import os
 import pathlib
 import threading
 import time
@@ -21,6 +22,7 @@ import webbrowser
 from PIL import Image
 
 from . import marks as marks_mod
+from .. import progress
 
 THUMB, LARGE = 180, 1100  # thumbnail and page-view widths in pixels
 
@@ -98,7 +100,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _local(self):
+        """Only requests addressed to this server by its loopback name: a web page whose own domain is made to
+        resolve to 127.0.0.1 (DNS rebinding) sends its domain as Host and is refused."""
+        port = self.server.server_address[1]
+        if self.headers.get("Host") in (f"127.0.0.1:{port}", f"localhost:{port}"):
+            return True
+        self._send(b"forbidden", "text/plain", 403)
+        return False
+
     def do_GET(self):
+        if not self._local():
+            return
         r = self.review
         path, _, query = self.path.partition("?")
         if path == "/":
@@ -120,6 +133,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(b"not found", "text/plain", 404)
 
     def do_POST(self):
+        if not self._local():
+            return
         r = self.review
         n = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(n).decode("utf-8") or "{}")
@@ -151,7 +166,8 @@ def serve(review, port=0, open_browser=True):
     """Serve the review page on 127.0.0.1 until the reader clicks Done (or Ctrl-C)."""
     server, url = start(review, port)
     print(f"parisaocr: review page at {url} (mark the openings, then Rebuild; Done closes it)", flush=True)
-    if open_browser:
+    progress.emit("review", url=url)
+    if open_browser and os.environ.get("PARISAOCR_NO_BROWSER") != "1":  # the app shows the page itself
         try:
             webbrowser.open(url)
         except Exception:

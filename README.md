@@ -33,6 +33,7 @@ parisaocr ocr book.pdf --out out --format pdf     # out/pdf/book.pdf: searchable
 parisaocr epub book.pdf --out out                 # out/book.epub (experimental)
 parisaocr epub book.pdf --out out --llm           # the structure decided by Gemini (API key)
 parisaocr epub book.pdf --out out --review        # then mark chapters by hand in the browser
+parisaocr app                                     # all of the above on a local page in the browser
 ```
 
 Inputs are images, directories of images, or a PDF (scanned pages are
@@ -41,6 +42,19 @@ typed over it, is drawn from the embedded image where the page places it,
 without the stamp — and born-digital pages rendered). Outputs: plain text (one
 line per printed line, columns right to left), hOCR with line and word boxes on
 the original page, and JSONL with text, boxes and confidences.
+
+### In the browser: `parisaocr app`
+
+`parisaocr app` opens a local page that does all of this without the command
+line. Drop a book or scans on it (or give their paths), set the options, follow
+each step's progress, then preview the EPUB, read its report, mark the chapters
+and download the results. For OCR jobs, each page's image is shown next to its
+text. Every option of `ocr`, `epub` and `pages` is on the page, and the page
+shows the equivalent command. When a language model decides a book's structure,
+the app stops after the OCR, shows what that book will cost, and sends nothing
+until you agree. The server listens on 127.0.0.1 only. Jobs and their files are
+kept in `~/ParisaOCR` (`--home` changes it): a job can be run again with other
+options, resumed after a cancel, or deleted. The page is in Persian and English.
 
 ### Searchable PDFs
 
@@ -285,7 +299,17 @@ pip install parisaocr
 parisaocr ocr page.png                      # چاپ متن
 parisaocr ocr book.pdf --out out            # out/txt و out/hocr
 parisaocr ocr book.pdf --out out --format pdf   # out/pdf/book.pdf: پی‌دی‌اف جست‌وجوپذیر
+parisaocr app                               # همهٔ کارها در مرورگر
 ```
+
+با `parisaocr app` صفحه‌ای در مرورگر باز می‌شود که همهٔ این کارها را بدون خط فرمان انجام
+می‌دهد: کتاب یا صفحه‌های اسکن‌شده را روی آن رها کنید (یا مسیرشان را بدهید)، گزینه‌ها را
+انتخاب کنید و پیشرفت هر مرحله را ببینید؛ سپس کتاب را پیش‌نمایش کنید، گزارش را بخوانید، فصل‌ها
+را علامت بزنید و نتیجه را دریافت کنید. برای اوسی‌آر، تصویر هر صفحه کنار متنش نشان داده
+می‌شود. همهٔ گزینه‌های خط فرمان در صفحه هست و فرمان معادل هم نشان داده می‌شود. اگر ساختار
+کتاب را مدل زبانی تعیین کند، پس از اوسی‌آر هزینهٔ همان کتاب نشان داده می‌شود و تا تأیید
+نکنید چیزی فرستاده نمی‌شود. برنامه فقط روی رایانهٔ خودتان (127.0.0.1) در دسترس است و کارها
+و فایل‌هایشان در پوشهٔ `~/ParisaOCR` می‌مانند. صفحه فارسی و انگلیسی است.
 
 با `--format pdf` خروجی یک پی‌دی‌اف جست‌وجوپذیر است: تصویر صفحه‌ها همان است که بود و
 یک لایهٔ متن نامرئی روی آن قرار می‌گیرد، تا بتوانید در آن جست‌وجو کنید و متن را انتخاب

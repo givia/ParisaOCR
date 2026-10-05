@@ -34,6 +34,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from PIL import Image, ImageDraw, ImageFont
 
+from .. import progress
+
 DEFAULT_MODEL = "gemini-3.8-flash"
 API = "https://generativelanguage.googleapis.com/v1beta"
 OPENROUTER = "https://openrouter.ai/api/v1"
@@ -616,11 +618,15 @@ def plan(ocr_dir, labels_dir, model=DEFAULT_MODEL):
     pages = sorted(int(f.stem[2:]) for f in (ocr_dir / "jsonl").glob("p-*.jsonl"))
     todo = [p for p in pages if _retry(labels_dir / f"p-{p:03d}.json")]
     if not todo:
-        return pages, todo, f"all {len(pages)} pages already labelled by Gemini (no cost)"
+        text = f"all {len(pages)} pages already labelled by Gemini (no cost)"
+        progress.emit("estimate", pages=len(pages), todo=0, cost=0.0, model=model, text=text)
+        return pages, todo, text
     usage = estimate(ocr_dir, todo)
     c = cost(usage, model)
     money = f"about ${c:.2f}" if c is not None else f"about {usage['input'] + usage['output']:,} tokens (no price known for {model})"
-    return pages, todo, f"{len(todo)} of {len(pages)} pages to label with {model}: {money}"
+    text = f"{len(todo)} of {len(pages)} pages to label with {model}: {money}"
+    progress.emit("estimate", pages=len(pages), todo=len(todo), cost=c, model=model, text=text)
+    return pages, todo, text
 
 
 # --- page labels -------------------------------------------------------------------------------------------------
@@ -844,6 +850,7 @@ def label_book(ocr_dir, labels_dir, model=DEFAULT_MODEL, jobs=8):
         key = load_key(model)
         client = client_for(resolve_model(model, key), key)
         print(f"parisaocr: {who}: {expected} (the page images and their OCR text are sent to {where})", flush=True)
+        progress.emit("llm", 0, len(todo), model=model)
         done, step = [0], max(10, len(todo) // 10)
 
         def one(p):
@@ -860,8 +867,9 @@ def label_book(ocr_dir, labels_dir, model=DEFAULT_MODEL, jobs=8):
                     return
                 (labels_dir / f"p-{p:03d}.json").write_text(json.dumps(res, ensure_ascii=False), encoding="utf-8")
                 done[0] += 1
+                c = cost(usage, client.model)
+                progress.emit("llm", done[0], len(todo), cost=c)
                 if done[0] % step == 0 or done[0] == len(todo):
-                    c = cost(usage, client.model)
                     print(f"parisaocr: {who} {done[0]}/{len(todo)} pages" + (f", ${c:.2f}" if c is not None else ""), flush=True)
 
         with ThreadPoolExecutor(max(1, jobs)) as pool:

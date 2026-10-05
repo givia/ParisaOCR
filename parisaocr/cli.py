@@ -1,4 +1,4 @@
-"""Command line: `parisaocr ocr`, `parisaocr epub`, `parisaocr pages` and `parisaocr cut`."""
+"""Command line: `parisaocr ocr`, `parisaocr epub`, `parisaocr pages`, `parisaocr cut` and `parisaocr app`."""
 import argparse
 import os
 import pathlib
@@ -8,7 +8,7 @@ import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from . import __version__, output
+from . import __version__, output, progress
 from .detect import detect_pages
 from .detectors import make_detector
 from .order import order
@@ -102,6 +102,7 @@ def cmd_ocr(opts):
         (out / f).mkdir(parents=True, exist_ok=True)
     todo = [(pid, p) for pid, p in pages if opts.redo or not all((out / f / f"{pid}.{f}").exists() for f in formats)]
     log(f"{len(pages)} pages, {len(todo)} to read -> {out}/{{{','.join(formats + ['pdf'] * want_pdf)}}}")
+    progress.emit("ocr", 0, len(todo), pages=len(pages))
     if not todo:
         if want_pdf:
             write_pdfs(opts, out, pages, log)
@@ -135,10 +136,12 @@ def cmd_ocr(opts):
                 n_lines += pending.result()
                 done += opts.batch
                 log(f"  {min(done, len(todo))}/{len(todo)} pages, {n_lines} lines, {time.time() - started:.0f} s")
+                progress.emit("ocr", min(done, len(todo)), len(todo), lines=n_lines)
             pending = cpu.submit(lambda recs=records: finish(recs, recognize_batch(recs, reader, options, tmp)))
         if pending:
             n_lines += pending.result()
     log(f"{len(todo)} pages, {n_lines} lines in {time.time() - started:.0f} s")
+    progress.emit("ocr", len(todo), len(todo), lines=n_lines)
     if want_pdf:
         write_pdfs(opts, out, pages, log)
     return pages
@@ -150,6 +153,7 @@ def write_pdfs(opts, out, pages, log):
     from . import pdfout
     from .pages import stamp_label
     (out / "pdf").mkdir(exist_ok=True)
+    progress.emit("pdf")
     pdf_inputs = [pathlib.Path(p) for p in opts.input if pathlib.Path(p).suffix.lower() == ".pdf"]
     pages_dir = (out / "pages").resolve()
     from_pdf = [(pid, p) for pid, p in pages if pathlib.Path(p).resolve().parent == pages_dir]
@@ -252,8 +256,13 @@ def cmd_cut(opts):
             test_pages=opts.test_pages, train_pages=opts.train_pages)
 
 
-def parser():
-    ap = argparse.ArgumentParser(prog="parisaocr", description=__doc__)
+def cmd_app(opts):
+    from .app.server import main as app_main
+    app_main(opts.home, opts.port, not opts.no_browser)
+
+
+def parser(cls=argparse.ArgumentParser):
+    ap = cls(prog="parisaocr", description=__doc__)
     ap.add_argument("--version", action="version", version=f"parisaocr {__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -349,6 +358,17 @@ def parser():
     c.add_argument("--crop-pad", type=int, default=10, help="margin of the saved line crops, in page pixels (vertical: half)")
     engine_args(c, default_model=f"{DEFAULT_TESSDATA}:{DEFAULT_LANG}")  # page filters are calibrated on Tesseract confidences
     c.set_defaults(func=cmd_cut)
+
+    a = sub.add_parser("app", help="the whole process in the browser: books to EPUB, OCR, searchable PDFs, review",
+                       description="A local web page (127.0.0.1 only) that runs these same commands: pick a book or "
+                                   "pages, set the options, follow the progress, check and download the results. "
+                                   "Jobs and their files are kept in HOME.")
+    a.add_argument("--home", help="folder for the app's jobs and their files (default: PARISAOCR_HOME or ~/ParisaOCR)")
+    a.add_argument("--port", type=int, default=0, help="port (default: any free one)")
+    a.add_argument("--no-browser", action="store_true",
+                   help="do not open the browser; print the address only (on a remote machine, forward the same port "
+                        "number, e.g. --port 8765 and ssh -L 8765:127.0.0.1:8765)")
+    a.set_defaults(func=cmd_app)
     return ap
 
 

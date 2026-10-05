@@ -16,6 +16,7 @@ import types
 from PIL import Image
 
 from . import source
+from .. import progress
 
 ALLOWED = set("0123456789۰۱۲۳۴۵۶۷۸۹*()-.[]")
 NUMBER = re.compile(r"^[\s(\[]*(\*{1,3}|[0-9۰-۹]{1,4})")
@@ -117,6 +118,7 @@ def reread(ocr_dir, model_path, device="cpu", log=print):
     pages = source.load(ocr_dir, note_numbers=False)
     jobs = [(p, l, box) for p in pages for l, box in candidates(p)]
     found = {}
+    progress.emit("notenum", 0, len(jobs))
     if jobs:
         log(f"parisaocr: re-reading the note numbers of {len(jobs)} lines from the page images")
         reader = digits_reader(model_path, device)
@@ -161,4 +163,5 @@ def reread(ocr_dir, model_path, device="cpu", log=print):
                                                      ensure_ascii=False), encoding="utf-8")
     kept = sum(len(v) for v in found.values())
     log(f"parisaocr: note numbers re-read from the image: {kept} of {len(jobs)} candidate lines")
+    progress.emit("notenum", len(jobs), len(jobs), kept=kept)
     return kept

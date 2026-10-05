@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "parisaocr"
-version = "0.5.1"
+version = "0.6.0"
 description = "Open-source OCR for printed Persian: PP-OCR line detection and a Kraken recognizer trained on Persian books"
 readme = "README.md"
 license = "Apache-2.0"
@@ -45,7 +45,7 @@ Model = "https://huggingface.co/givia/ParisaOCR"
 parisaocr = "parisaocr.cli:main"
 
 [tool.setuptools]
-packages = ["parisaocr", "parisaocr.ebook"]
+packages = ["parisaocr", "parisaocr.ebook", "parisaocr.app"]
 
 [tool.setuptools.package-data]
-parisaocr = ["models/*.safetensors", "models/*.onnx", "models/roles/*.npz", "fonts/*.ttf", "fonts/*.txt"]
+parisaocr = ["models/*.safetensors", "models/*.onnx", "models/roles/*.npz", "fonts/*.ttf", "fonts/*.txt", "app/static/*"]

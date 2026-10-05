@@ -113,7 +113,7 @@ def test_review_page_and_api(epub, tmp_path):
         assert saved["reviewed"] and saved["pages"]["3"]["title"] == "فصل" and saved["auto"]["3"]["title"] == "ج"
         out = post("/api/build", {"pages": {"5": {"kind": "chapter", "title": "پنج"}}})
         assert out["ok"] and out["epub"] == "x.epub" and built[0]["pages"] == {5: {"kind": "chapter", "title": "پنج"}}
-        assert post("/api/quit", {})["ok"] and r.done.is_set()
+        assert post("/api/quit", {})["ok"] and r.done.wait(5)  # set right after the reply is sent
     finally:
         server.shutdown()
 

@@ -18,6 +18,8 @@ import sys
 import numpy as np
 from PIL import Image
 
+from . import progress
+
 # Poppler's tools have no memory bound of their own: one malformed page made pdfimages grow to
 # 22 GB and the kernel's OOM killer took the whole desktop session with it. Each call gets an
 # address-space limit instead, so a pathological page fails alone (and is rendered or lost).
@@ -82,6 +84,7 @@ def pdf_pages(pdf, pages_dir, mode, dpi, first, last, redo):
     have = {p: pages_dir / f"p-{p:03d}.png" for p in wanted if (pages_dir / f"p-{p:03d}.png").exists()}
     if len(have) == len(wanted) and not redo:
         print(f"{pdf.name}: {len(wanted)} pages already in {pages_dir}", flush=True)
+        progress.emit("pages", len(wanted), len(wanted))
         return [(f"p-{p:03d}", have[p]) for p in wanted]
     # `pdfimages -list` walks the whole file (a minute on a 700-page scan), so it is only run
     # when the mode has to be decided or a page turns out to hold several images.
@@ -177,6 +180,7 @@ def pdf_pages(pdf, pages_dir, mode, dpi, first, last, redo):
     if lost:
         print(f"{pdf.name}: no image for pages {lost[:10]}{'...' if len(lost) > 10 else ''}", file=sys.stderr)
     print(f"{pdf.name}: {len(done)} pages -> {pages_dir}", flush=True)
+    progress.emit("pages", len(done), len(wanted))
     return [(f"p-{p:03d}", pages_dir / f"p-{p:03d}.png") for p in wanted if p in done]
 
 

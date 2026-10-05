@@ -23,6 +23,7 @@ import numpy as np
 from PIL import Image
 
 from . import labels, roles
+from .. import progress
 from .source import Line
 from .textutil import DIGITS, ascii_digits, is_digits
 
@@ -174,7 +175,8 @@ def orient_figures(layouts, ocr_dir, read):
                     im.rotate(angle, expand=True, fillcolor=255 if im.mode in ("1", "L") else (255, 255, 255)).save(img)
                 todo.append(str(img))
     if todo:
-        read(todo, rot, "jsonl")
+        with progress.renamed("ocr", "figures"):
+            read(todo, rot, "jsonl")
     undecided = []
     for L in figs:
         scores = {0: _readable([{"text": l.text, "conf": l.conf} for l in L.page.lines])}
