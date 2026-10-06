@@ -233,17 +233,12 @@ def cmd_epub(opts):
         o.input, o.out, o.format = list(inputs), str(out), formats
         cmd_ocr(o)
 
+    opts.confidence = bool(opts.review)  # the review panel shows how sure the models are, labelled pages too
     res = convert(opts, read)
     if opts.review:
         from .ebook import review
-
-        def rebuild(marks):
-            r = convert(opts, read, marks=marks)
-            return {"epub": str(r["epub"]), "summary": r["summary"]}
-
-        r = review.Review(res["title"], review.pages_of(res["ordered"], res["book"], res["layouts"]),
-                          res["marks_path"], rebuild, res["work"] / "review")
-        review.serve(r, opts.port)
+        panel = review.Panel(res, lambda marks: convert(opts, read, marks=marks), res["work"] / "review")
+        review.serve(panel, opts.port)
 
 
 def cmd_cut(opts):
@@ -326,8 +321,10 @@ def parser(cls=argparse.ArgumentParser):
                    help="a page labeller's labels (p-NNN.json, book_outline.json, book_meta.json, as --llm writes "
                         "them): they decide the structure instead of the layout rules")
     e.add_argument("--review", action="store_true",
-                   help="after converting, open a local page to mark the parts, chapters, sections and figure pages by "
-                        "hand and rebuild the EPUB; the marks (OUT/NAME.marks.json) are used by every later run")
+                   help="after converting, open the review panel (a local page) to check the book page by page, least "
+                        "sure first, and fix anything: line roles, headings, paragraphs, footnotes and their markers, "
+                        "texts, missed lines, pages, pictures, chapters, the book's details; then rebuild the EPUB. The "
+                        "corrections (OUT/NAME.review.json, OUT/NAME.marks.json) are used by every later run")
     e.add_argument("--port", type=int, default=0, help="port of the review page (default: any free one)")
     engine_args(e)
     e.set_defaults(func=cmd_epub)

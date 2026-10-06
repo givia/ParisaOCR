@@ -117,6 +117,8 @@ def add_markers(layout, mask=None):
         host = [l for l in L.body if l is not s and l.y0 - 0.5 * l.h <= s.yc <= l.y0 + 0.5 * l.h and l.x0 - l.h <= s.x0 <= l.x1]
         if host:
             _insert(host[0], (s.x0 + s.x1) / 2, s.text.strip())
+            first = (getattr(host[0], "parts", None) or [host[0]])[0]  # an OCR line of the page: the review panel
+            first.marker_rows = list(getattr(first, "marker_rows", ())) + [s.row]  # shows the number with it
             if getattr(s, "markers", None):  # the labeller's marker moves with it
                 hm = getattr(host[0], "markers", None) or []
                 host[0].markers = hm + [k for k in s.markers if k not in hm]

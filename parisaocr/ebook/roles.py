@@ -593,11 +593,13 @@ def describe(model_dir):
     return f"models {meta.get('version', '?')}" + (f", {meta['books']} books" if meta.get("books") else "")
 
 
-def annotate(pages, image_of=None, model_dir=BUNDLED):
+def annotate(pages, image_of=None, model_dir=BUNDLED, decide=True):
     """Computes the features (PAGES and IMAGE_OF as for `features`) and attaches the predictions of the models
     in MODEL_DIR (role.npz, note.npz, heading.npz, start.npz, level.npz) to every Line: role (the 13-class
     role's name), p_note, p_head, p_start (probabilities), level (1-3, for every line; 0 when there is no level
-    model). A missing model leaves its attribute unset, with a warning. -> lines annotated."""
+    model). A missing model leaves its attribute unset, with a warning. Every line also gets `model`, the same
+    predictions with the role's probability, for the review panel's confidence; with DECIDE false only that (the
+    models then show their doubts on a page a labeller decides). -> lines annotated."""
     model_dir = pathlib.Path(model_dir)
     forests = {name: Forest(model_dir / f"{name}.npz") for name, _ in MODELS if (model_dir / f"{name}.npz").exists()}
     need = set().union(*(m.names for m in forests.values())) if forests else set()
@@ -620,12 +622,20 @@ def annotate(pages, image_of=None, model_dir=BUNDLED):
         if missing:
             raise ValueError(f"{path} was trained on features this code does not compute: {missing}; retrain the models")
         Xm = X[:, [names.index(n) for n in m.names]]  # the model's columns, by name (version 1 models: the first 46)
+        probs = None
         if name == "role":
             vals = [m.labels[int(c)] for c in m.predict(Xm)]
+            probs = m.proba(Xm).max(axis=1).tolist()
         elif name == "level":
             vals = [int(v) for v in m.predict(Xm)]
         else:
             vals = m.proba(Xm)[:, m.classes.index(1)].tolist()
-        for (_, l), v in zip(index, vals):
-            setattr(l, attr, v)
+        for k, ((_, l), v) in enumerate(zip(index, vals)):
+            if decide:
+                setattr(l, attr, v)
+            if getattr(l, "model", None) is None:
+                l.model = {}
+            l.model[name] = v
+            if probs is not None:
+                l.model["role_p"] = probs[k]
     return len(index)

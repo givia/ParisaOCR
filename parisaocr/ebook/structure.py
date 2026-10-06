@@ -112,12 +112,27 @@ _MARKER = re.compile(rf"(?<=[^\s{DIGITS}/\-(])([{DIGITS}]{{1,3}})(?=[\s.،؛:!?�
                      # when the page has an unlinked note with that number
                      rf"|(?<=[^\s{DIGITS}])\s([{DIGITS}]{{1,3}})(?=[.،؛:!?؟»)\]]|\s*$)"
                      rf"|(?<=[.،؛:!؟»)])\s([{DIGITS}]{{1,3}})(?=\s)")
+PERSON, NOT_MARKER = labels_mod.PERSON, labels_mod.NOT_MARKER
+_UNMARK = {ord(MARK): None, ord(PERSON): None, ord(NOT_MARKER): None}  # the converter's marks, out of the text
 _LABEL_WORDS = "فصل|بخش|قسمت|گفتار|دفتر|پیوست|ضمیمه"
 _LABEL = re.compile(rf"^({_LABEL_WORDS})\s+\S+")
 _LEADERS = re.compile(r"(?:\s*[.…·])+\s*$|(?:\s*[.…·]){2,}")
 _END_PUNCT = (".", "،", ":", "؛", "!", "»", ")")
 _FRACTION = re.compile(rf"[{DIGITS}]+/[{DIGITS}]+")
 _FIGURE_LIST = re.compile(r"تصاویر|تصویرها|عکس|نقشه|اشکال|شکل|نمودار|جدول|جداول")  # "فهرست نقشه‌ها" etc.
+
+
+def _decide(l, role, level=0, para=None):
+    """Record what the converter made of an OCR line (`decisions` collects it for the review panel): its role (the
+    labeller's names: body, heading, quote, verse, note ...), a heading's level, whether it starts a paragraph. A line
+    joined from pieces passes it on to them."""
+    d = {"r": role}
+    if level:
+        d["l"] = level
+    if para is not None:
+        d["p"] = bool(para)
+    for i, x in enumerate(getattr(l, "parts", None) or [l]):
+        x.decided = dict(d, p=False) if i and para else dict(d)  # a paragraph starts at its first piece
 
 
 def _marker_num(m):
@@ -389,18 +404,21 @@ def _two_columns(L, lines):
 
 def _join_rows(lines):
     """Pieces of one printed line that the OCR returned separately (split around a stacked fraction),
-    joined right to left; a fraction bar read as "-" after the fraction is dropped."""
-    rows = []
+    joined right to left; a fraction bar read as "-" after the fraction is dropped. Pieces a person gave different
+    roles (review panel) stay apart; a line joined takes the role a person gave its pieces, and starts a paragraph
+    where they started one (else where the converter had started it, at its first piece)."""
+    forced = lambda x: getattr(x, "forced", None)
+    rows, out = [], []
     for l in sorted(lines, key=lambda l: l.y0):
         for r in rows:
             y0, y1 = max(x.y0 for x in r), min(x.y1 for x in r)
             if min(y1, l.y1) - max(y0, l.y0) > 0.5 * min(l.h, min(x.h for x in r)) \
-                    and all(min(l.x1, x.x1) - max(l.x0, x.x0) < 0.2 * min(l.h, x.h) for x in r):
+                    and all(min(l.x1, x.x1) - max(l.x0, x.x0) < 0.2 * min(l.h, x.h) for x in r) \
+                    and len({forced(x) for x in r + [l]} - {None}) <= 1:
                 r.append(l)
                 break
         else:
             rows.append([l])
-    out = []
     for r in rows:
         if len(r) == 1:
             out.append(r[0])
@@ -414,7 +432,22 @@ def _join_rows(lines):
             texts.append(t)
         box = (min(l.x0 for l in r), min(l.y0 for l in r), max(l.x1 for l in r), max(l.y1 for l in r))
         words = [w for l in r for w in sorted(l.words, key=lambda w: -w.bbox[2])]
-        out.append(Line(" ".join(texts), box, min(l.conf for l in r), words, latin=all(l.latin for l in r)))
+        joined = Line(" ".join(texts), box, min(l.conf for l in r), words, latin=all(l.latin for l in r))
+        joined.parts = [x for l in r for x in (getattr(l, "parts", None) or [l])]
+        mine = [x for x in r if forced(x) is not None]
+        if mine:  # the role a person gave its pieces
+            joined.forced = mine[0].forced
+            joined.forced_fields = set().union(*(getattr(x, "forced_fields", set()) for x in r))
+            if "level" in mine[0].__dict__:
+                joined.level = mine[0].level
+        pf = getattr(r[0], "para_forced", None)  # a line starts a paragraph at its first piece; a later one can only
+        if pf is None and any(getattr(x, "para_forced", None) for x in r[1:]):  # start one (a person's start there)
+            pf = True
+        if pf is not None:
+            joined.para_forced = pf
+        if getattr(r[0], "para_snap", None) is not None:
+            joined.para_snap = r[0].para_snap
+        out.append(joined)
     return sorted(out, key=lambda l: l.y0)
 
 
@@ -437,6 +470,7 @@ class Assembler:
         self.max_note = 0  # the highest note number read so far
         self.last_linked = {}
         self.explicit = {}
+        self.claimed = {}  # {page: note numbers whose markers a person placed}
         self.prev_ended = True
         self.report = {"headings": [], "unlinked_notes": [], "stray_markers": [], "toc_unmatched": [], "dropped": [],
                        "verse": 0, "poem": 0, "tables": 0, "figures": 0, "quotes": 0, "endnotes": 0, "unlinked_endnotes": 0}
@@ -451,6 +485,8 @@ class Assembler:
                 # the indents of one book vary by a percent or two
                 self.para.kind = "p"
                 self.report["quotes"] -= 1
+                if getattr(self, "quote_line", None) is not None:
+                    _decide(self.quote_line, "body", para=True)  # recorded as it is shown (the review panel)
             self.chapter.blocks.append(self.para)
             self.para = None
         if self.deferred:
@@ -481,21 +517,38 @@ class Assembler:
     # -- inline text and footnote markers --
     def inline(self, text, page_no, ltr=False):
         text = normalize(text)
-        if ltr:
-            text = text.replace(MARK, "")
+        if ltr and PERSON not in text:
+            text = text.translate(_UNMARK)
             return [Span(text)] if text else []
         notes = self.notes_by_page.get(page_no, {})
+        claimed = self.claimed.get(page_no, ())  # notes whose markers a person placed: linked there alone
         items, pos = [], 0
         for m in _MARKER.finditer(text):
+            at = next((m.start(g) for g in (1, 2, 3, 4) if m.group(g)), m.start())
+            before = text[at - 1:at]
+            if before == NOT_MARKER or (ltr and before != PERSON):
+                continue  # digits a person left as text; in a left-to-right line, only a person's markers
             last = self.last_linked.get(page_no, 0)
             following = next((notes[k] for k in sorted(notes) if k > last and not notes[k].linked
-                              and k not in self.explicit.get(page_no, ())), None)
-            if m.group(0) == MARK:
+                              and k not in self.explicit.get(page_no, ()) and k not in claimed), None)
+            if before == PERSON:  # a marker a person placed: the note of its number, as given
+                k = _marker_num(m)
+                note = notes.get(k)
+                if (note is None or note.linked) and k in self.unit_notes and not self.unit_notes[k].linked:
+                    note = self.unit_notes[k]  # an endnote of the unit
+                    self.chapter.notes.append(note)
+                if note is None or note.linked:
+                    self.report["stray_markers"].append(
+                        (page_no, m.group(0), text[max(0, m.start() - 25):m.end() + 5].translate(_UNMARK)))
+                    continue
+            elif m.group(0) == MARK:
                 note = following
                 if note is None:
                     items.append(text[pos:m.start()])
                     pos = m.end()
                     continue
+            elif _marker_num(m) in claimed:
+                continue  # the OCR's digits of a note whose marker a person placed elsewhere: text
             elif m.group(3) or m.group(4):
                 note = notes.get(_marker_num(m))
                 if note is None or note.linked:
@@ -517,7 +570,10 @@ class Assembler:
             self.last_linked[page_no] = note.num
             pos = m.end()
         items.append(text[pos:])
-        return [x for x in items if x != ""]
+        items = [x.translate(_UNMARK) if isinstance(x, str) else x for x in items]
+        if ltr:
+            items = [Span(x) if isinstance(x, str) else x for x in items]
+        return [x for x in items if x != "" and not (isinstance(x, Span) and not x.text)]
 
     def para_append(self, text, page_no, kind="p", ltr=False, strong=False):
         if self.para is None:
@@ -528,8 +584,10 @@ class Assembler:
             if not (isinstance(last, str) and last.endswith((" ", "\u200c"))):
                 self.para.items.append(" ")
             self.para.ltr = self.para.ltr and ltr
-        if self.para.ltr:
-            self.para.items.append(text.replace(MARK, ""))  # a left-to-right paragraph needs no spans
+        if self.para.ltr and PERSON not in text:
+            self.para.items.append(text.translate(_UNMARK))  # a left-to-right paragraph needs no spans
+        elif self.para.ltr:  # with a person's markers: linked, without spans
+            self.para.items += [x.text if isinstance(x, Span) else x for x in self.inline(text, page_no, True)]
         else:
             self.para.items += self.inline(text, page_no, ltr)
         self.para_lines += 1
@@ -539,6 +597,12 @@ class Assembler:
         """The page's notes, split by `notes.split_notes` (numbers per page, per chapter or through the book)."""
         lines = [l for row in _rows(L.notes) for l in row]
         lead, found = L.label_notes if getattr(L, "label_notes", None) is not None else split_notes(lines, self.max_note, L.width)
+        for l in lines:
+            x = getattr(l, "note_start", None)
+            for part in getattr(l, "parts", None) or [l]:
+                part.decided = {"r": "note", "n": x if x is not None else 0}
+        for l in getattr(L, "endnote_lines", None) or []:
+            l.decided = {"r": "endnote", "n": getattr(l, "note_num", None) or 0}
         if lead:
             if self.last_note is not None and self.last_note.page >= n - 2:
                 self.last_note.text += " " + " ".join(lead)  # a note continued from the previous page
@@ -595,11 +659,15 @@ class Assembler:
             for l in lines:
                 l.drop_marks = gate
                 if gate and getattr(l, "label_role", None) is not None and not getattr(l, "markers", None) and MARK in l.text:
-                    l.text = l.text.replace(MARK, "")
-        for l in lines:  # the note markers a page labeller saw, written into the text where the OCR lost them
-            if getattr(l, "markers", None):
+                    l.text = l.text.translate(_UNMARK)
+        for l in lines:  # the note markers a page labeller saw (or a person set), written into the text
+            if getattr(l, "markers", None) or labels_mod.exact(l):
                 l.text, l.markers = labels_mod.marked_text(l), []
-        lines = [l for l in sorted(lines, key=lambda l: l.y0) if not (l.h < 0.5 * L.lh and len(l.text) <= 2)]
+        speck = lambda l: l.h < 0.5 * L.lh and len(l.text) <= 2 and getattr(l, "forced", None) is None
+        for l in lines:
+            if speck(l):
+                _decide(l, "noise")  # a speck, a stray mark
+        lines = [l for l in sorted(lines, key=lambda l: l.y0) if not speck(l)]
         cols = _two_columns(L, lines)
         if cols:
             self.list_page(L, n, lines, cols)
@@ -632,46 +700,59 @@ class Assembler:
             nxt = lines[idx + 1] if idx + 1 < len(lines) else None
             prev_y1 = l.y1
             role = getattr(l, "label_role", None)
-            if role in ("byline", "epigraph"):  # an author's name under a title, a motto
+            forced = getattr(l, "forced", None)  # a role a person set on the review panel: body and quote go on
+            if forced is not None and forced not in ("body", "quote"):  # below as the converter's own do
+                prev = self.forced_line(L, n, lines, idx, skip, prev)
+                after_table = None
+                continue
+            if forced is None and role in ("byline", "epigraph"):  # an author's name under a title, a motto
                 self.add(Block("byline", self.inline(text, n)))
+                _decide(l, role)
                 prev = None
                 continue
 
-            if (re.fullmatch(r"[*٭✽✱\s]+", text) and text.count("*") + text.count("٭") >= 2) or \
-                    (l.w < 0.2 * L.width and l.h < 0.7 * L.lh and (l.conf < 85 or "*" in text)):
+            if forced is None and ((re.fullmatch(r"[*٭✽✱\s]+", text) and text.count("*") + text.count("٭") >= 2) or
+                                   (l.w < 0.2 * L.width and l.h < 0.7 * L.lh and (l.conf < 85 or "*" in text))):
                 # a section break: asterisks, or an ornament ("❋ ❋ ❋") the recognizer made letters of
                 if not (self.chapter.blocks and self.chapter.blocks[-1].kind == "sep" and self.para is None):
                     self.add(Block("sep"))
+                _decide(l, "other")
                 prev = None
                 continue
-            if l.conf < 80 and role in (None, "other", "figure"):
+            if forced is None and l.conf < 80 and role in (None, "other", "figure"):
                 self.report["dropped"].append((n, text))  # stamps, letterheads, handwriting, map labels
+                _decide(l, "noise")
                 continue
-            if ind > 0.4 and sl < 0.1 and not ltr:
+            if forced is None and ind > 0.4 and sl < 0.1 and not ltr:
                 # a short line against the left margin: a signature, a place and date
                 self.add(Block("sign", self.inline(text, n)))
+                _decide(l, "other")
                 prev = None
                 continue
             table_below = any(r.kind == "table" and 0 < r.bbox[1] - l.y1 < 3 * L.lh for r in regions)
-            if after_table is not None and gap is not None and gap < 1.5 and sl > 0.3 \
+            if forced is None and after_table is not None and gap is not None and gap < 1.5 and sl > 0.3 \
                     and self.para is None and self.chapter.blocks and self.chapter.blocks[-1].kind == "table":
                 self.chapter.blocks[-1].items += ["\n"] + self.inline(text, n)  # the table's source line
+                _decide(l, "caption")
                 prev = None
                 continue
-            if table_below and _centered(l, W, 0.25):
+            if forced is None and table_below and _centered(l, W, 0.25):
                 self.add(Block("caption", self.inline(text, n)))  # the table's number and title
+                _decide(l, "caption")
                 prev = None
                 continue
             after_table = None
-            if l.split is not None:
-                ws = sorted(l.words, key=lambda w: -w.bbox[2])
-                first = " ".join(w.text for w in ws if (w.bbox[0] + w.bbox[2]) / 2 > l.split)
-                second = " ".join(w.text for w in ws if (w.bbox[0] + w.bbox[2]) / 2 <= l.split)
-                if self.para is None or self.para.kind != "verse":
+            if forced is None and l.split is not None:
+                first, second = _halves(l)
+                if self.para is None or self.para.kind != "verse" or getattr(l, "para_forced", None):
                     self.close_para()
                     self.para = Block("verse")
-                self.para.rows.append((first.replace(MARK, ""), second.replace(MARK, "")))
+                if PERSON in first + second:  # a person's markers: linked from the half they are in
+                    self.para.rows.append((self.inline(first, n), self.inline(second, n)))
+                else:
+                    self.para.rows.append((first.translate(_UNMARK), second.translate(_UNMARK)))
                 self.report["verse"] += 1
+                _decide(l, "verse")
                 prev = l
                 continue
             score = self.toc_score(text, n)
@@ -681,33 +762,43 @@ class Assembler:
             learned_head = getattr(l, "p_head", None) is not None and l.p_head >= 0.5 and l.conf >= 85 and len(text) < 100
             label = getattr(l, "label_role", None)  # a page labeller's word decides
             head = label == "heading" if label is not None else (geo or learned_head or (score >= 0.6 and sl > 0.05 and (gap is None or gap > 0.5)))
-            if not ltr and head:
+            if forced is None and not ltr and head:
                 if nxt is not None and nxt.h >= 0.97 * L.lh and (nxt.x0 - L.left) / L.width > 0.3 \
                         and nxt.y0 - l.y1 < 0.6 * L.lh and self.toc_score(text + " " + nxt.text, n) > score + 0.1:
                     text += " " + nxt.text.strip()
                     skip.add(idx + 1)
                     prev_y1 = nxt.y1
+                    _decide(nxt, "heading", 2)
                 self.add(Block("h2", self.inline(text, n)))
                 self.report["headings"].append((n, text, round(score, 2)))
+                _decide(l, "heading", 2)
                 prev = None
                 continue
-            if sl > 0.04 and (ind > self.indent + 0.02 or (ind > 0.75 * self.indent and l.h < 0.92 * L.lh and l.w > 0.5 * L.width)):
+            if forced == "quote" or (forced is None and sl > 0.04 and (ind > self.indent + 0.02 or (
+                    ind > 0.75 * self.indent and l.h < 0.92 * L.lh and l.w > 0.5 * L.width))):
                 # indented further than a paragraph (or as far, in smaller type: told on long lines, as the box of
                 # a short line is often lower than the type), and not reaching the left margin
                 new = (self.para is None or self.para.kind != "quote" or (gap is not None and gap > 0.9)
                        or (prev is not None and l.x1 < prev.x1 - 0.02 * L.width))
+                if getattr(l, "para_forced", None) is not None:  # where a person starts (or not) a paragraph
+                    new = l.para_forced or self.para is None or self.para.kind != "quote"
                 if new:
                     self.close_para()
                     self.report["quotes"] += 1
-                self.para_append(text, n, "quote", ltr, strong=ind > self.indent + 0.04)
+                self.para_append(text, n, "quote", ltr, strong=forced == "quote" or ind > self.indent + 0.04)
+                self.quote_line = l  # (a one-line quote becomes a paragraph: `close_para`)
+                _decide(l, "quote", para=new)
                 prev = l
                 continue
             starts = (ind > min(0.05, max(0.015, 0.6 * self.indent)) or self.para is None or self.para.kind != "p"
                       or (prev is not None and (prev.x0 - L.left) / L.width > 0.06)
                       or (prev is None and self.prev_ended) or (gap is not None and gap > 0.9))
+            if getattr(l, "para_forced", None) is not None:  # where a person starts (or not) a paragraph
+                starts = l.para_forced or self.para is None or self.para.kind != "p"
             if starts:
                 self.close_para()
             self.para_append(text, n, "p", ltr)
+            _decide(l, "body", para=starts)
             prev = l
         for r in regions:
             self.region(r, L, n)
@@ -715,40 +806,132 @@ class Assembler:
         self.prev_ended = (last is None or (last.x0 - L.left) / L.width > 0.06
                            or bool(L.regions and L.regions[-1].bbox[1] > last.y1))
 
+    def forced_line(self, L, n, lines, idx, skip, prev):
+        """LINES[IDX], whose role a person set on the review panel (`labels._human`): it goes where its role says; a
+        heading printed on two lines is one heading (the next ones joined go in SKIP); a paragraph starts where the
+        person (or, before them, the converter) started one. -> the line a next one continues, if any."""
+        l = lines[idx]
+        role = l.forced
+        text = l.text.strip()
+        ltr = l.latin or latin_ratio(text) > 0.5
+        starts = getattr(l, "para_forced", None)
+        if starts is None:
+            starts = getattr(l, "para_snap", None)  # the converter's start, as the panel showed it
+        if role in ("figure", "table", "contents", "noise", "header", "pagenum", "note", "endnote") or not text:
+            _decide(l, role)  # not running text: the picture's or table's own, or out of the book
+            return prev
+        if role == "heading":
+            run, k = [l], idx + 1
+            while (k < len(lines) and getattr(lines[k], "forced", None) == "heading"
+                   and getattr(lines[k], "level", 0) == getattr(l, "level", 0)
+                   and lines[k].y0 - run[-1].y1 < 0.8 * max(1.0, L.lh or run[-1].h)):
+                run.append(lines[k])
+                skip.add(k)
+                k += 1
+            text = " ".join(x.text.strip() for x in run)
+            self.add(Block("h2", self.inline(text, n)))
+            self.report["headings"].append((n, text.translate(_UNMARK), 1.0))
+            for x in run:
+                _decide(x, "heading", max(2, getattr(l, "level", 0) or 2))
+            return None
+        if role in ("byline", "epigraph"):
+            self.add(Block("byline", self.inline(text, n)))
+            _decide(l, role)
+            return None
+        if role == "caption":
+            self.add(Block("caption", self.inline(text, n)))
+            _decide(l, "caption")
+            return None
+        if role == "verse":
+            if l.split is not None:
+                first, second = _halves(l)
+                if self.para is None or self.para.kind != "verse" or starts:
+                    self.close_para()
+                    self.para = Block("verse")
+                if PERSON in first + second:  # a person's markers: linked from the half they are in
+                    self.para.rows.append((self.inline(first, n), self.inline(second, n)))
+                else:
+                    self.para.rows.append((first.translate(_UNMARK), second.translate(_UNMARK)))
+                self.report["verse"] += 1
+            else:  # a line of verse set alone: a poem's line
+                if self.para is None or self.para.kind != "poem":
+                    self.close_para()
+                    self.para = Block("poem")
+                elif starts:
+                    self.para.rows.append("")  # a stanza break
+                self.para.rows.append(self.inline(text, n, ltr))
+                self.report["poem"] += 1
+            _decide(l, "verse", para=starts)
+            return l
+        kind = {"quote": "quote", "reference": "bib"}.get(role, "p")
+        if starts is None:  # as the converter would start it
+            starts = (self.para is None or self.para.kind != kind
+                      or (L.width > 1 and (L.right - l.x1) / L.width > min(0.05, max(0.015, 0.6 * self.indent)))
+                      or (prev is not None and L.width > 1 and (prev.x0 - L.left) / L.width > 0.06)
+                      or (prev is None and self.prev_ended))
+        if starts or self.para is None or self.para.kind != kind:
+            self.close_para()
+            if kind == "quote":
+                self.report["quotes"] += 1
+        self.para_append(text, n, kind, ltr, strong=kind == "quote")
+        _decide(l, role, para=starts)
+        return l
+
     def hanging_page(self, L, n, lines):
         """A list set with hanging indents (a bibliography): an unindented line starts an entry, indented
         lines continue it (indented on the left for an English entry); a centred line heads the list."""
-        for l in lines:
+        skip = set()
+        for idx, l in enumerate(lines):
+            if idx in skip:
+                continue
+            if getattr(l, "forced", None) is not None:  # a role a person set on the review panel
+                self.forced_line(L, n, lines, idx, skip, None)
+                continue
             text = l.text.strip()
             if l.conf < 80:
                 self.report["dropped"].append((n, text))
+                _decide(l, "noise")
                 continue
             ltr = latin_ratio(text) > 0.5
             ind, sl = (L.right - l.x1) / L.width, (l.x0 - L.left) / L.width
             if ind > 0.1 and sl > 0.1 and abs(ind - sl) < 0.08 and len(text) < 60:
                 self.add(Block("h2", self.inline(text, n)))
                 self.report["headings"].append((n, text, 0))
+                _decide(l, "heading", 2)
                 continue
-            if (sl if ltr else ind) <= 0.02 or self.para is None or self.para.kind != "bib":
+            new = (sl if ltr else ind) <= 0.02 or self.para is None or self.para.kind != "bib"
+            if getattr(l, "para_forced", None) is not None:  # where a person starts (or not) an entry
+                new = l.para_forced or self.para is None or self.para.kind != "bib"
+            if new:
                 self.close_para()
                 self.para = Block("bib", [], ltr)
                 self.para_lines, self.para_strong = 0, False
             self.para_append(text, n, "bib", ltr)
+            _decide(l, "reference", para=new)
         for r in L.regions:
             self.region(r, L, n)
         self.prev_ended = False
 
     def poem_page(self, L, n, lines):
         """A page of verse set line by line: each printed line stays a line; a gap starts a new stanza."""
-        prev = None
-        for l in lines:
+        prev, skip = None, set()
+        for idx, l in enumerate(lines):
+            if idx in skip:
+                continue
+            if getattr(l, "forced", None) is not None:  # a role a person set on the review panel
+                prev = self.forced_line(L, n, lines, idx, skip, prev)
+                continue
             if l.conf < 80:
                 self.report["dropped"].append((n, l.text.strip()))
+                _decide(l, "noise")
                 continue
+            pf = getattr(l, "para_forced", None)  # a stanza a person starts (or not) here
+            stanza = pf if pf is not None else prev is not None and l.y0 - prev.y1 > 0.9 * L.lh
+            _decide(l, "verse", para=stanza)
             if self.para is None or self.para.kind != "poem":
                 self.close_para()
                 self.para = Block("poem")
-            elif prev is not None and l.y0 - prev.y1 > 0.9 * L.lh:
+            elif stanza:
                 self.para.rows.append("")  # a stanza break
             self.para.rows.append(self.inline(l.text.strip(), n, latin_ratio(l.text) > 0.5))
             self.report["poem"] += 1
@@ -758,7 +941,20 @@ class Assembler:
         self.prev_ended = True
 
     def list_page(self, L, n, lines, cols):
-        """A bibliography page: authors in one column, their works beside them in the other."""
+        """A bibliography page: authors in one column, their works beside them in the other. Lines whose role a
+        person set (review panel) follow the list, in their order."""
+        mine = sorted((l for l in lines if getattr(l, "forced", None) is not None), key=lambda l: (l.y0, -l.x1))
+        lines = [l for l in lines if getattr(l, "forced", None) is None]
+        self.list_entries(L, n, lines, cols)
+        skip, prev = set(), None
+        for idx in range(len(mine)):
+            if idx not in skip:
+                prev = self.forced_line(L, n, mine, idx, skip, prev)
+        self.prev_ended = False
+
+    def list_entries(self, L, n, lines, cols):
+        if not lines:
+            return
         a, b = cols
         right = [l for l in lines if l.x0 >= a]
         left = [l for l in lines if l.x1 <= b]
@@ -772,6 +968,7 @@ class Assembler:
                   and l.h >= 1.05 * np.median([t.h for t in texts]) and not l.text.strip().endswith(_END_PUNCT)]:
             self.add(Block("h2", self.inline(l.text, n)))
             self.report["headings"].append((n, l.text, 0))
+            _decide(l, "heading", 2)
             texts.remove(l)
         edge_l = np.percentile([l.x0 for l in texts], 10) if texts else 0
         edge_r = np.percentile([l.x1 for l in texts], 90) if texts else 0
@@ -781,8 +978,10 @@ class Assembler:
             owner.setdefault(id(hs[-1]) if hs else None, []).append(t)
         for t in owner.get(None, []):  # an entry continued from the previous page
             self.para_append(t.text, n, "bib", latin_ratio(t.text) > 0.5)
+            _decide(t, "reference", para=False)
         for h in heads:
             ltr = latin_ratio(h.text) > 0.5
+            _decide(h, "reference", para=True)
             self.close_para()
             items = self.inline(h.text.strip(), n, ltr)
             if any(isinstance(x, NoteRef) for x in items):  # the head carries a note marker: linked, as running text
@@ -796,10 +995,13 @@ class Assembler:
                     self.close_para()
                     self.para = Block("bib", [], ltr)
                 self.para_append(t.text, n, "bib", ltr)
+                _decide(t, "reference", para=gap > 0.08 * L.page.width)
                 prev = t
         self.prev_ended = False
 
     def region(self, r, L, n):
+        for l in r.lines:
+            _decide(l, "table" if r.kind == "table" else "figure")
         if r.kind == "table":
             rows = _rows(r.lines, 0.4)
             xs = sorted((l.x0 + l.x1) / 2 for row in rows for l in row)
@@ -819,13 +1021,15 @@ class Assembler:
                     cells = [""] * len(cols)
                     for l in row:
                         k = int(np.argmin([abs((l.x0 + l.x1) / 2 - c) for c in cols]))
-                        cells[k] = (cells[k] + " " + l.text.replace(MARK, "")).strip()
+                        cells[k] = (cells[k] + " " + l.text.translate(_UNMARK)).strip()
                     table.append(cells)
                 self.close_para()
                 caption = []
                 while self.chapter.blocks and self.chapter.blocks[-1].kind == "caption":
                     caption = self.chapter.blocks.pop().items + (["\n"] if caption else []) + caption
-                self.add(Block("table", caption, rows=table, image=(L, r.bbox, 0)))
+                blk = Block("table", caption, rows=table, image=(L, r.bbox, 0))
+                blk.mode = getattr(L, "table_mode", None)  # a person's choice for this page: "image" or "html"
+                self.add(blk)
                 self.report["tables"] += 1
                 return
         self.deferred.append(Block("figure", image=(L, r.bbox, 0)))
@@ -834,6 +1038,7 @@ class Assembler:
     # -- the whole book --
     def run(self, pages, starts):
         for L, n in pages:
+            self.claimed[n] = {k for l in L.page.lines if labels_mod.exact(l) for k in getattr(l, "label_m", None) or []}
             for a, b in self.missing:
                 if b == n - 1 and self.chapter is not None:
                     note = (f"[صفحات {fa_num(a)}–{fa_num(b)} در نسخهٔ اسکن‌شده موجود نیست]" if a != b
@@ -842,11 +1047,25 @@ class Assembler:
             front = n not in starts and (self.chapter is None or self.chapter.kind == "front")
             notes = self.read_notes(L, n) if L.kind == "text" and not front else []
             lines = L.body
-            if n in starts and starts[n]["kind"] == "part":
+            if n in starts:
+                s = starts[n]
+                taken = {id(x) for x in s.get("rest") or []}
+                for l in s.get("after_h2") or []:
+                    _decide(l, "heading", 2)
+                    taken.add(id(l))
+                for l in s.get("bylines") or []:
+                    _decide(l, "byline")
+                    taken.add(id(l))
+                for l in L.body:  # the rest of the title block: the unit's title and its label (a section's title)
+                    if id(l) not in taken:
+                        _decide(l, "heading", 2 if s["kind"] == "section" else 1)
+            part = n in starts and starts[n]["kind"] == "part"
+            if part:
                 self.new_chapter(starts[n]["title"], n, kind="part")
-                if n >= 1:  # as for text pages below: a page before the first printed number has none to mark
-                    self.add(Block("mark", [PageMark(n)]))
-                continue
+                if n >= 1 and float(n).is_integer():  # as for text pages below: a page before the first printed
+                    self.add(Block("mark", [PageMark(n)]))  # number has none to mark, nor a page kept without one
+                if not (starts[n].get("after_h2") or starts[n].get("bylines") or starts[n].get("rest")):
+                    continue  # the part's title page; one that prints more (a person's reading) goes on below
             if n in starts:
                 s = starts[n]
                 if s["kind"] == "chapter":
@@ -856,15 +1075,25 @@ class Assembler:
                 elif self.chapter is None:  # a titled section before the first chapter
                     self.new_chapter("", n, kind="front")
                 for l in s["after_h2"]:
+                    if labels_mod.exact(l):
+                        l.text, l.markers = labels_mod.marked_text(l), []
+                    if getattr(l, "forced", None) not in (None, "heading"):  # a person's role
+                        self.forced_line(L, n, [l], 0, set(), None)
+                        continue
                     self.add(Block("h2", self.inline(l.text, n)))
-                    self.report["headings"].append((n, l.text, 1.0))
+                    self.report["headings"].append((n, l.text.translate(_UNMARK), 1.0))
                 for l in s["bylines"]:
+                    if labels_mod.exact(l):
+                        l.text, l.markers = labels_mod.marked_text(l), []
+                    if getattr(l, "forced", None) not in (None, "byline", "epigraph"):  # a person's role
+                        self.forced_line(L, n, [l], 0, set(), None)
+                        continue
                     self.add(Block("byline", self.inline(l.text, n)))
                 lines = s["rest"]
             elif self.chapter is None:
                 self.new_chapter("", n, kind="front")
             self.chapter.notes += notes
-            if self.chapter.kind != "front" and n >= 1:
+            if self.chapter.kind != "front" and n >= 1 and float(n).is_integer() and not part:
                 mark = PageMark(n)
                 if self.para is not None and self.para.kind == "poem":
                     self.para.rows.append([mark])
@@ -873,6 +1102,8 @@ class Assembler:
                 else:
                     self.add(Block("mark", [mark]))
             if L.kind == "figure":
+                for l in L.page.lines:
+                    _decide(l, "figure")
                 cap = self.fig_captions.get(n, "")
                 fig = Block("figure", [cap] if cap else [], image=(L, L.crop, L.rotate))
                 self.report["figures"] += 1
@@ -884,13 +1115,34 @@ class Assembler:
             if L.kind == "blank":
                 continue
             if self.chapter.kind == "front":
+                for l in L.body + L.notes + [x for r in L.regions for x in r.lines]:
+                    _decide(l, "other")
                 rows = _rows(L.body + L.notes + [x for r in L.regions for x in r.lines])
-                self.add(Block("lines", rows=[" ".join(l.text for l in r) for r in rows]))
+                self.add(Block("lines", rows=[" ".join(l.text for l in r).translate(_UNMARK) for r in rows]))
                 continue
             self.text_page(L, n, lines)
             self.link_leftovers(n)
         self.close_para()
         self.flush_endnotes()
+
+
+def _halves(l):
+    """A verse line's two halves: its words either side of the gap; its text when a person corrected it or set its
+    markers, split where they typed "/" (else after as many words as the first half has)."""
+    ws = sorted(l.words, key=lambda w: -w.bbox[2])
+    first = [w.text for w in ws if (w.bbox[0] + w.bbox[2]) / 2 > l.split]
+    fields = getattr(l, "forced_fields", set())
+    if not ({"x", "m", "a"} & fields):
+        return " ".join(first), " ".join(w.text for w in ws if (w.bbox[0] + w.bbox[2]) / 2 <= l.split)
+    text = l.text.strip()
+    if "x" in fields:
+        for sep in ("/", "|"):
+            if sep in text:
+                a, b = text.split(sep, 1)
+                return a.strip(), b.strip()
+    tokens = text.split()
+    k = min(len(first), len(tokens))
+    return " ".join(tokens[:k]), " ".join(tokens[k:])
 
 
 def _hanging_page(L, lines):
@@ -968,9 +1220,9 @@ def chapter_openings(pages, contents):
                                      bylines=sure[:k], rest=[l for l in L.body if l not in sure[:k + 1]])
             continue
         before, title, after, rest = tb
-        text = " ".join(l.text for l in title).replace(MARK, "")
+        text = " ".join(l.text for l in title).translate(_UNMARK)
         lead = title[0].text.strip() if _LABEL.match(title[0].text) and len(title) > 1 else ""
-        main_text = " ".join(l.text for l in (title[1:] if lead else title)).replace(MARK, "")
+        main_text = " ".join(l.text for l in (title[1:] if lead else title)).translate(_UNMARK)
         near = [e for e in contents if e.page is not None and abs(e.page - n) <= 1]
         best = max(near, key=lambda e: _similar(text, e.title), default=None)
         # listed in the contents: the whole title, its label ("فصل پنجم" on a row of its own there), or the
@@ -994,7 +1246,7 @@ def chapter_openings(pages, contents):
         main = title[1:] if label else title
 
         def name(lines):
-            t = " ".join(l.text for l in lines).replace(MARK, "")
+            t = " ".join(l.text for l in lines).translate(_UNMARK)
             t = re.sub(rf"(?<=\S)[{DIGITS}]{{1,2}}$", "", t)  # a note marker on the title
             return f"{label}: {t}" if label else t
         k = len(main)
@@ -1249,7 +1501,7 @@ def book_openings(pages, contents, starts):
             if tb is None:
                 continue
             before, title, after, rest = tb
-            out[n] = dict(kind="chapter", title=" ".join(l.text for l in title).replace(MARK, ""), label="",
+            out[n] = dict(kind="chapter", title=" ".join(l.text for l in title).translate(_UNMARK), label="",
                           title_lines=title, after_h2=[], bylines=after + before, rest=rest)
             continue
         out[n] = dict(kind="chapter", title=contents[i].title, label="", title_lines=[sure[k]], after_h2=[],
@@ -1262,7 +1514,7 @@ def book_openings(pages, contents, starts):
             if tb is None:
                 continue
             before, title, after, rest = tb
-            text = " ".join(l.text for l in title).replace(MARK, "")
+            text = " ".join(l.text for l in title).translate(_UNMARK)
             out[n] = dict(kind="chapter", title=text, label="", title_lines=title, after_h2=[], bylines=after + before,
                           rest=rest)
     return _body_start(out, aligned, contents, by_n)
@@ -1302,9 +1554,10 @@ def paragraph_indent(pages):
     return max(bins, key=lambda k: bins[k - 1] + 2 * bins[k] + bins[k + 1]) / 200
 
 
-def build(ordered, marks=None):
+def build(ordered, marks=None, cover_page=None):
     """The Book of the ordered pages. MARKS, a reviewed marks file (`marks.load`), replaces the openings the
-    rules find with the reader's; the rules' own are kept in the report as "starts", for the review page."""
+    rules find with the reader's; the rules' own are kept in the report as "starts", for the review page.
+    COVER_PAGE: the PDF page a person chose as the cover (else a first page that is a picture)."""
     pages = list(ordered.pages)
     max_page = max((n for _, n in pages), default=0)
 
@@ -1312,10 +1565,14 @@ def build(ordered, marks=None):
     toc, toc_pages, prev, kind = [], set(), False, "contents"
     label_toc = labels_mod.contents_pages(pages)
     for k, (L, n) in enumerate(pages):
-        is_toc = n in label_toc if getattr(L, "labelled", False) else is_toc_page(L, prev, early=k < 15)
+        mine = getattr(L.page, "human_page", ())  # what a person set for the page (review panel)
+        if "type" in mine:
+            is_toc = L.page.label_type == "contents"
+        else:
+            is_toc = n in label_toc if getattr(L, "labelled", False) else is_toc_page(L, prev, early=k < 15)
         if is_toc:
             toc_pages.add(n)
-            entries = labels_mod.toc_entries(L) if getattr(L, "labelled", False) else []
+            entries = labels_mod.toc_entries(L) if getattr(L, "labelled", False) or "toc" in mine else []
             if entries:
                 toc += [TocEntry(title, pg, level) for title, pg, level in entries]
             else:  # no labels, or labels without the page's entries (a local labeller): the rules read them
@@ -1328,18 +1585,26 @@ def build(ordered, marks=None):
     contents = [e for e in toc if e.list == "contents"]
     fig_captions = {e.page: e.title for e in toc if e.list == "figures" and e.page is not None}
     pages = [(L, n) for L, n in pages if n not in toc_pages and getattr(L.page, "label_type", "") != "ad"]
-    cover = pages[0] if pages and pages[0][0].kind == "figure" else None
+    chosen = next(((L, n) for L, n in pages if L.page.index == cover_page), None) if cover_page else None
+    cover = chosen or (pages[0] if pages and pages[0][0].kind == "figure" else None)
     if cover:
-        pages = pages[1:]
+        pages = [x for x in pages if x is not cover]
 
     if any(getattr(L, "labelled", False) for L, _ in pages):
         # a page labeller's openings; the rules' only on the pages it did not label
         starts = labels_mod.openings(pages)
         if not all(getattr(L, "labelled", False) for L, _ in pages if L.kind == "text"):
             rules = book_openings(pages, contents, chapter_openings(pages, contents))
-            starts.update({n: st for n, st in rules.items() if not getattr(next(L for L, m in pages if m == n), "labelled", False)})
+            by_n = {m: L for L, m in pages}
+            starts.update({n: st for n, st in rules.items() if not getattr(by_n[n], "labelled", False)})
     else:
         starts = book_openings(pages, contents, chapter_openings(pages, contents))
+    # where a person changed a unit's title line (review panel) on a page no labeller labelled: the page opens what
+    # its lines say now
+    mine = [(L, n) for L, n in pages if getattr(L.page, "title_changed", False) and not getattr(L, "labelled", False)]
+    for _, n in mine:
+        starts.pop(n, None)
+    starts.update(labels_mod.human_openings(mine) if mine else {})
     auto = marks_mod.snapshot(starts, pages)
     if marks and marks.get("reviewed"):
         starts = marks_mod.apply(marks, pages, starts)

@@ -176,8 +176,9 @@ class Writer:
                 out.append("<blockquote>\n" + "\n".join(group) + "\n</blockquote>")
                 continue
             elif k == "verse":
-                rows = "\n".join(f'<p class="beyt"><span class="m">{esc(a)}</span> <span class="m">{esc(c)}</span></p>'
-                                 for a, c in b.rows)
+                half = lambda x: self.inline(x, refs) if isinstance(x, list) else esc(x)  # a list: with note markers
+                rows = "\n".join(f'<p class="beyt"><span class="m">{half(a)}</span> <span class="m">{half(c)}</span></p>'
+                                  for a, c in b.rows)
                 out.append(f'<div class="verse">\n{rows}\n</div>')
             elif k == "poem":
                 stanzas, cur = [], []
@@ -207,7 +208,7 @@ class Writer:
                 more = "" if b.lead else " more"
                 lead = f'<span class="author">{esc(b.lead)}</span> ' if b.lead else ""
                 out.append(f'<p class="bib{more}"{ltr}>{lead}{self.inline(b.items, refs)}</p>')
-            elif k == "table" and self.tables == "html":
+            elif k == "table" and (getattr(b, "mode", None) or self.tables) == "html":
                 rows = "\n".join("<tr>" + "".join(f"<td>{esc(c)}</td>" for c in r) + "</tr>" for r in b.rows)
                 cap = f"<caption>{self.inline(b.items, refs)}</caption>\n" if b.items else ""
                 out.append(f"<table>\n{cap}{rows}\n</table>")

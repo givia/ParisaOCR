@@ -88,7 +88,13 @@ def apply(marks, pages, starts):
         L, n = by_pdf[pdf]
         title, auto = m["title"], starts.get(n)
         if m["kind"] == "part":
-            out[n] = dict(kind="part", title=title or (auto or {}).get("title", ""), after_h2=[], bylines=[], rest=[])
+            # the part's title page; what a page prints under the title (a section's title, text) stays its text
+            if auto is not None and auto["kind"] == "part" and (not title or _similar(title, _title_of(auto)) >= 0.95):
+                out[n] = auto
+                continue
+            found = _title_lines(L, title or _title_of(auto), auto)
+            out[n] = dict(kind="part", title=title or (auto or {}).get("title", ""), after_h2=[], bylines=[],
+                          rest=[l for l in L.body if l not in found] if found else [])
             continue
         if auto is not None and auto["kind"] == m["kind"] and (not title or _similar(title, _title_of(auto)) >= 0.95):
             out[n] = auto

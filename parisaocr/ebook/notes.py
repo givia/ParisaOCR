@@ -89,6 +89,8 @@ def split_notes(lines, top, area_width):
     stars = [_STARS.match(t) for t in texts]
     if any(stars):
         notes, lead = [], []
+        for l, s in zip(lines, stars):
+            l.note_start = len(s.group(1)) if s else 0
         for t, s in zip(texts, stars):
             if s:
                 notes.append([len(s.group(1)), s.group(2).strip(), True])
@@ -137,6 +139,8 @@ def split_notes(lines, top, area_width):
             starts[i] = (k0 + n, _LOST.sub("", texts[i]).strip())
 
     lead, notes = [], []
+    for i, l in enumerate(lines):  # for the review panel: the number of the note a line starts, 0 where it continues one
+        l.note_start = starts[i][0] if i in starts else 0
     for i, t in enumerate(texts):
         if i in starts:
             notes.append([starts[i][0], starts[i][1], False])

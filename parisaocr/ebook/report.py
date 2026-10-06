@@ -18,7 +18,8 @@ def build(pages, layouts, ordered, book, extra):
             f"- OCR: ParisaOCR, model `{extra.get('model', '')}`",
             "- Structure: " + (f"a page labeller's labels ({extra['roles'].split('(', 1)[1]}" if (extra.get("roles") or "").startswith("page labels")
                                else f"layout rules with learned line roles ({extra['roles']})" if extra.get("roles") else "layout rules only")
-            + (f"; {extra['marks']} pages marked by hand (--review)" if extra.get("marks") else ""),
+            + (f"; {extra['marks']} pages marked by hand (--review)" if extra.get("marks") else "")
+            + (f"; {extra['reviewed']} pages corrected by hand (review panel)" if extra.get("reviewed") else ""),
             *([f"- Page labeller: {extra['gemini']}"] if extra.get("gemini") else []),
             f"- epubcheck: {extra.get('epubcheck', 'not run')}",
             f"- Time: {extra.get('seconds', 0):.0f} s (OCR {'reused' if extra.get('ocr_reused') else 'run'})", ""]
@@ -31,6 +32,12 @@ def build(pages, layouts, ordered, book, extra):
         out.append(f"- PDF pages {a}–{b} were scanned in reverse (book pages {na}–{nb}); put back in order")
     for dropped, kept, n in ordered.duplicates:
         out.append(f"- Book page {n} was scanned twice (PDF {dropped} and {kept}); kept PDF {kept}")
+    for pdf, n, owner in getattr(ordered, "apart", []):
+        if n is None:
+            out.append(f"- PDF page {pdf} has no page number of its own: kept after the page before it in the PDF")
+        else:
+            out.append(f"- PDF page {pdf} carries the number {n} of PDF page {owner} but is another page: kept after the "
+                       f"page before it in the PDF, without a number (a misread number, or pages numbered apart)")
     for a, b in ordered.missing:
         out.append(f"- **Book page{'s' if a != b else ''} {a}{'–' + str(b) if a != b else ''} missing from the scan**; "
                    "a note marks the gap")

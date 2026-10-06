@@ -12,7 +12,7 @@ import subprocess
 import sys
 import time
 
-from . import epub, labels, layout, marks as marks_mod, order, refine, report, source, structure
+from . import corrections as corr_mod, epub, labels, layout, marks as marks_mod, order, refine, report, source, structure
 from .. import progress
 
 EPUBCHECK = os.environ.get("EPUBCHECK_JAR", "")
@@ -76,6 +76,10 @@ def convert(opts, read, marks=None):
     print("parisaocr: page layout", flush=True)
     progress.emit("layout")
     ps = source.load(ocr_dir)
+    # a person's corrections from the review panel (OUT/NAME.review.json): the pages they changed decide as given
+    corr_path = corr_mod.path_for(out, name)
+    corr = corr_mod.load(corr_path)
+    reviewed = corr_mod.labels_for(corr, lambda pdf: source.rows(ocr_dir, pdf)) if corr["pages"] else {}
     latin = sum(l.latin for p in ps for l in p.lines)
     marks_path = marks_mod.path_for(out, name)
     if marks is None:
@@ -86,7 +90,9 @@ def convert(opts, read, marks=None):
         from . import gemini
         labels_dir = str(work / gemini.labels_dirname(opts.gemini_model))
         info["gemini"] = gemini.label_book(ocr_dir, labels_dir, model=opts.gemini_model, jobs=opts.gemini_jobs)
-    layouts = layout.analyze_all(ps, roles_dir=opts.roles, report=info, labels_dir=labels_dir)
+    layouts = layout.analyze_all(ps, roles_dir=opts.roles, report=info, labels_dir=labels_dir, reviewed=reviewed,
+                                 confidence=getattr(opts, "confidence", False))
+    corr_mod.apply_pages(layouts, reviewed)  # page types, crops, rotations, pictures, tables a person set
     if marks:
         marks_mod.apply_figures(marks, layouts)
     layout.orient_figures(layouts, ocr_dir, read)
@@ -94,7 +100,7 @@ def convert(opts, read, marks=None):
     ordered = order.order(layouts)
     print("parisaocr: book structure", flush=True)
     progress.emit("structure")
-    book = structure.build(ordered, marks)
+    book = structure.build(ordered, marks, cover_page=(corr["book"] or {}).get("cover"))
 
     meta = json.loads(pathlib.Path(opts.meta).expanduser().read_text(encoding="utf-8")) if opts.meta else {}
     for k in META_KEYS:
@@ -107,6 +113,9 @@ def convert(opts, read, marks=None):
             v = "، ".join(x for x in v if x) if isinstance(v, list) else v
             if v and not meta.get(k):
                 meta[k] = v
+    for k, v in ((corr["book"] or {}).get("meta") or {}).items():  # the person's word comes last, and stands
+        if v:
+            meta[k] = "، ".join(v) if isinstance(v, list) else v
     if not meta.get("title"):
         front = next((b.rows[0] for ch in book.chapters if ch.kind == "front" for b in ch.blocks if b.kind == "lines" and b.rows), None)
         meta["title"] = front or pdf.stem
@@ -117,11 +126,12 @@ def convert(opts, read, marks=None):
     text = report.build(ps, layouts, ordered, book, dict(
         title=meta["title"], pdf=pdf, epub=path, size=path.stat().st_size, epubcheck=check,
         seconds=time.time() - t0, ocr_reused=reused, latin=latin, markers=markers, **info,
-        marks=len(marks["pages"]) if marks and marks.get("reviewed") else 0,
+        marks=len(marks["pages"]) if marks and marks.get("reviewed") else 0, reviewed=len(reviewed),
         model=f"{ocr_dir.name.removeprefix('ocr-')} ({opts.model})"))
     (out / f"{name}.report.md").write_text(text, encoding="utf-8")
     progress.emit("report", epub=path, report=out / f"{name}.report.md", title=meta["title"])
     print(f"parisaocr: report -> {out / f'{name}.report.md'} (pages and notes to check first)\nparisaocr: epubcheck: {check}")
     summary = "\n".join(l.lstrip("- ") for l in text.splitlines() if l.startswith(("- Structure", "- ")) and ("chapters," in l or "Structure" in l))
     return dict(epub=path, report=out / f"{name}.report.md", summary=summary, title=meta["title"], book=book,
-                ordered=ordered, layouts=layouts, marks_path=marks_path, work=work)
+                ordered=ordered, layouts=layouts, marks_path=marks_path, work=work, pages=ps, ocr_dir=ocr_dir,
+                corrections_path=corr_path, meta=meta)

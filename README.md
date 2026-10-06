@@ -32,7 +32,7 @@ parisaocr ocr book.pdf --out out --first 10 --last 20
 parisaocr ocr book.pdf --out out --format pdf     # out/pdf/book.pdf: searchable
 parisaocr epub book.pdf --out out                 # out/book.epub (experimental)
 parisaocr epub book.pdf --out out --llm           # the structure decided by Gemini (API key)
-parisaocr epub book.pdf --out out --review        # then mark chapters by hand in the browser
+parisaocr epub book.pdf --out out --review        # then check and fix the book in the browser
 parisaocr app                                     # all of the above on a local page in the browser
 ```
 
@@ -47,8 +47,8 @@ the original page, and JSONL with text, boxes and confidences.
 
 `parisaocr app` opens a local page that does all of this without the command
 line. Drop a book or scans on it (or give their paths), set the options, follow
-each step's progress, then preview the EPUB, read its report, mark the chapters
-and download the results. For OCR jobs, each page's image is shown next to its
+each step's progress, then preview the EPUB, read its report, fix it in the
+review panel and download the results. For OCR jobs, each page's image is shown next to its
 text. Every option of `ocr`, `epub` and `pages` is on the page, and the page
 shows the equivalent command. When a language model decides a book's structure,
 the app stops after the OCR, shows what that book will cost, and sends nothing
@@ -169,15 +169,35 @@ for these models. Gemma 4 31B is also free from Google with a Gemini key
 300-page book; with more jobs Google refuses requests and the run stops after
 a few dozen pages (running it again continues).
 
-**Three minutes of your own marking make the chapters right whatever the
-scan,** with or without Gemini. `--review` opens a local page (127.0.0.1,
-nothing leaves your machine) with every page as a thumbnail in reading order
-and the converter's decisions on them: parts, chapters and sections with
-their titles, figure pages. Click to add or remove an opening, fix a title
-(the OCR of the page's first lines is offered), set its level, then
-*Rebuild*. The marks are saved as `out/book.marks.json`, used by every later
-run of the book, and the converter's own decisions are kept beside them for
-comparison.
+**Anything the converter got wrong can be fixed by hand,** with or without a
+language model. `--review` opens a review panel (127.0.0.1, nothing leaves
+your machine) that shows every page with each OCR line's role as the converter
+decided it (body, heading, footnote, running head, quote, verse, caption …)
+and how sure it is. You can change:
+
+- a line's role, with one key, for one line or a dragged group, and a heading's level;
+- where paragraphs start;
+- the footnotes: one click sets where a page's footnotes start, notes are split
+  or merged by their numbers, and a marker is placed by clicking the word it
+  follows (the note then links exactly there, whatever digits the OCR read);
+- a misread line's text; a line the OCR missed, of any role; a line the OCR
+  read as one with another (split it at the cursor);
+- a contents page's entries, the page's type and printed number, figure pages
+  (crop, rotation), the pictures on a page (draw or remove), tables as images
+  or HTML;
+- the parts and chapters, the book's details and its cover.
+
+The open issues come first, least sure first: notes without a marker,
+contents entries no heading matches, chapters the contents do not list, gaps
+in note numbers, lines the models doubt, lines the OCR read uncertainly. The
+confidence shown is measured: the footnote and heading models' probabilities
+find their own mistakes well (on books they never trained on, 0.995 and 0.98
+on a scale where 0.5 is chance), the OCR's weakest word on a line only
+roughly (0.74). Changes are saved as you make them in `out/book.review.json`
+(chapters in `out/book.marks.json`). They can be undone, are found again if
+the book is OCR'd anew, and are used by every later conversion. *Rebuild*
+takes seconds. The panel is in Persian and English, and the app shows it in
+its "Review and fix" tab.
 
 This is experimental: it was developed on 23 books (novels, a poetry
 anthology, histories with many footnotes, collections, a play, a book exported
@@ -320,7 +340,7 @@ parisaocr app                               # همهٔ کارها در مرور�
 ```
 parisaocr epub book.pdf --out out --title "…" --author "…"
 parisaocr epub book.pdf --out out --llm         # ساختار کتاب با Gemini
-parisaocr epub book.pdf --out out --review      # سپس علامت‌گذاری فصل‌ها در مرورگر
+parisaocr epub book.pdf --out out --review      # سپس بازبینی و اصلاح کتاب در مرورگر
 ```
 
 از کتاب اسکن‌شده یک کتاب EPUB می‌سازد که روی گوشی و کتاب‌خوان خوانده می‌شود: فصل‌ها
@@ -348,9 +368,19 @@ parisaocr epub book.pdf --out out --review      # سپس علامت‌گذاری
 نمی‌دارند و برای آموزش استفاده نمی‌کنند. روی دو کتاب پرپانویس، هر دو مدل همهٔ فصل‌ها را پیدا
 کردند و ۷۹ تا ۸۸ درصد پانویس‌ها را درست پیوند دادند (Gemini: ۹۲ درصد).
 
-با `--review` صفحه‌ای در مرورگر خودتان باز می‌شود که همهٔ صفحه‌های کتاب را کوچک و به
-ترتیب نشان می‌دهد. آغاز بخش‌ها، فصل‌ها و زیربخش‌ها و عنوانشان را درست کنید و کتاب را
-دوباره بسازید؛ این علامت‌ها ذخیره می‌شوند و در اجراهای بعدی هم به کار می‌روند.
+با `--review` صفحهٔ بازبینی در مرورگر خودتان باز می‌شود (هیچ چیز از رایانه بیرون نمی‌رود).
+هر صفحه با سطرهایش نشان داده می‌شود: مبدل هر سطر را چه دانسته (متن، عنوان، پانویس،
+سرصفحه، نقل‌قول، شعر و …) و چقدر به آن مطمئن است. هر چیزی را می‌توانید درست کنید:
+نقش هر سطر (با یک کلید)، سطح عنوان، آغاز بند، پانویس‌ها (با یک کلیک جای شروع پانویس‌ها،
+شمارهٔ هر پانویس، و جای نشانهٔ پانویس با زدن روی واژه‌ای که بعد از آن می‌آید)، متنی که
+اوسی‌آر بد خوانده، سطری که نخوانده، سطری که با سطر دیگری یکی خوانده (شکستن سطر در جای
+مکان‌نما)، مدخل‌های فهرست، نوع و شمارهٔ چاپی صفحه، صفحه‌های
+تصویر (برش و چرخش)، تصویرهای یک صفحه، جدول‌ها، فصل‌ها و بخش‌ها، مشخصات کتاب و جلد.
+موردهای مشکوک اول می‌آیند و نامطمئن‌ترین‌ها جلوتر: پانویس‌هایی که نشانه‌شان پیدا نشده،
+مدخل‌های فهرستی که عنوانی برایشان نیست، سطرهایی که مدل‌ها یا اوسی‌آر به آن‌ها مطمئن نیستند.
+اصلاح‌ها همان لحظه در `out/book.review.json` ذخیره می‌شوند، واگردپذیرند و در همهٔ تبدیل‌های
+بعدی به کار می‌روند؛ بازسازی کتاب چند ثانیه طول می‌کشد. در برنامهٔ مرورگری (`parisaocr app`)
+همین صفحه در زبانهٔ «بازبینی و اصلاح» است.
 
 محدودیت‌ها:
 

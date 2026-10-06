@@ -12,14 +12,25 @@ in the running header is the ground truth, once it is read reliably:
    OCR missed) take one from the nearest numbered pages on each side when the
    two agree on a run, forward or reversed; otherwise they continue the run of
    the page before them.
-3. Pages that end up with the same number are duplicate scans; the one read
-   with the most confidence stays.
+3. Pages that end up with the same number: the number is the page's whose
+   number was set by hand, else read (not inferred), else best backed by its
+   neighbours. Another page that reads like it, or like another page of the
+   group, is a second scan and is dropped (blank pages too). Any other page
+   stays in the book, after the page before it in the PDF, under a key between
+   that page's number and the next (no printed number of its own): a page whose
+   number was misread, front matter whose inferred numbers run into the
+   numbered pages, a second run of numbers (two parts numbered apart).
 4. Numbers missing from the sequence are reported, and the book gets a note
    at that point.
+
+A page a person kept in the book on the review panel (`keep_by_hand`) is never
+dropped as a second scan.
 """
+import re
 from dataclasses import dataclass, field
 
 WINDOW = 8
+_WORD = re.compile(r"[\w\u200c]{3,}")
 
 
 @dataclass
@@ -28,7 +39,18 @@ class Ordered:
     reversed_runs: list = field(default_factory=list)  # (first PDF page, last PDF page, first number, last number)
     duplicates: list = field(default_factory=list)  # (dropped PDF page, kept PDF page, number)
     missing: list = field(default_factory=list)  # (first number, last number)
+    apart: list = field(default_factory=list)  # (PDF page kept without a number, the number, the PDF page that has it)
     inferred: int = 0
+
+
+def _alike(a, b):
+    """Pages A and B are one page scanned twice: their words are mostly the same (Jaccard 0.5; on the dev books second
+    scans read 0.97 to 1.0 alike, different pages that took one number 0.17 at most), or neither has text to tell."""
+    ta = {w for l in a.page.lines for w in _WORD.findall(l.text)}
+    tb = {w for l in b.page.lines for w in _WORD.findall(l.text)}
+    if len(ta) < 8 or len(tb) < 8:
+        return len(ta) < 8 and len(tb) < 8
+    return len(ta & tb) / len(ta | tb) >= 0.5
 
 
 def _support(nums, i, c):
@@ -69,11 +91,15 @@ def order(layouts):
     nums = [[c] if c is not None else [] for c in chosen]
     chosen = [c if c is not None and _support(nums, i, c) > 0 else None for i, c in enumerate(chosen)]
     chosen = [None if c is not None and _off_run(chosen, i) else c for i, c in enumerate(chosen)]
+    for i, l in enumerate(layouts):  # a number a person set on the review panel is the page's, whatever the others say
+        if getattr(l, "number_by_hand", None) is not None:
+            chosen[i] = l.number_by_hand
 
     known = [i for i, c in enumerate(chosen) if c is not None]
     if not known:
         return Ordered([(l, i + 1) for i, l in enumerate(layouts)])
     final, inferred = list(chosen), 0
+    wanted = {}  # pages left without a number: the number the run before them would have given
     taken = set(c for c in chosen if c is not None)
 
     def direction(k, side):
@@ -100,13 +126,20 @@ def order(layouts):
                 options.append(chosen[a] + direction(a, -1) * (i - a))
             if b is not None:
                 options.append(chosen[b] - direction(b, +1) * (b - i))
+            if a is not None and options[0] in taken:
+                # a read page carries the number the run before it would give: no number of its own; it follows the
+                # page before it in the PDF (front matter numbered apart, a page inserted) unless it reads like that
+                # page (a second scan of it)
+                final[i], wanted[i] = None, options[0]
+                inferred += 1
+                continue
             final[i] = next((n for n in options if n not in taken), options[0])
         taken.add(final[i])
         inferred += 1
 
     runs, start = [], None
     for i in range(1, len(final) + 1):
-        down = i < len(final) and final[i] == final[i - 1] - 1
+        down = i < len(final) and None not in (final[i], final[i - 1]) and final[i] == final[i - 1] - 1
         if down and start is None:
             start = i - 1
         elif not down and start is not None:
@@ -115,12 +148,45 @@ def order(layouts):
 
     by_num = {}
     for l, n in zip(layouts, final):
-        by_num.setdefault(n, []).append(l)
-    out, dups = [], []
+        if n is not None:
+            by_num.setdefault(n, []).append(l)
+    pos = {id(l): i for i, l in enumerate(layouts)}
+    out, dups, kept, apart = [], [], [], []
+    for i, (l, n) in enumerate(zip(layouts, final)):  # pages with no number of their own
+        if n is None:
+            twin = next((x for x in by_num.get(wanted.get(i), []) if _alike(l, x)), None)
+            if twin is not None and not getattr(l, "keep_by_hand", False):
+                dups.append((l.page.index, twin.page.index, wanted[i]))  # a second scan of the page with that number
+            else:
+                kept.append(l)
+                apart.append((l.page.index, None, None))
     for n in sorted(by_num):
-        group = sorted(by_num[n], key=lambda l: (l.kind == "text", l.quality), reverse=True)
+        def rank(l):
+            i = pos[id(l)]
+            return (getattr(l, "number_by_hand", None) is not None, chosen[i] == n, _support(cands, i, n),
+                    l.kind == "text", l.quality)
+        group = sorted(by_num[n], key=rank, reverse=True)
         out.append((group[0], n))
-        dups += [(d.page.index, group[0].page.index, n) for d in group[1:]]
+        seen = [group[0]]
+        for d in group[1:]:
+            twin = next((k for k in seen if _alike(d, k)), None)
+            if twin is None or getattr(d, "keep_by_hand", False):
+                kept.append(d)  # another page: it stays, without the number
+                apart.append((d.page.index, n, group[0].page.index))
+            else:
+                dups.append((d.page.index, twin.page.index, n))  # the same page scanned again
+            seen.append(d)
+    if kept:  # after the page before them in the PDF, between its key and the next one's
+        key_of = {id(l): n for l, n in out}
+        for d in sorted(kept, key=lambda l: l.page.index):
+            i = next(j for j, l in enumerate(layouts) if l is d)
+            before = next((key_of[id(layouts[j])] for j in range(i - 1, -1, -1) if id(layouts[j]) in key_of), None)
+            higher = sorted(k for k in key_of.values() if before is None or k > before)
+            key = (before + higher[0]) / 2 if before is not None and higher else (before + 0.5 if before is not None
+                                                                                  else (higher[0] - 0.5 if higher else 0.5))
+            key_of[id(d)] = key
+            out.append((d, key))
+        out.sort(key=lambda x: x[1])
     nums_sorted = sorted(by_num)
     missing = [(a + 1, b - 1) for a, b in zip(nums_sorted, nums_sorted[1:]) if b - a > 1]
-    return Ordered(out, runs, dups, missing, inferred)
+    return Ordered(out, runs, dups, missing, inferred=inferred, apart=apart)

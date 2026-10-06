@@ -34,6 +34,8 @@ _GLUED = re.compile(rf"(?<=[^\s{DIGITS}/\-(])([{DIGITS}]{{1,3}})(?=[\s.،؛:!?؟
 _DIGIT_RUN = re.compile(rf"(?<=[^\s{DIGITS}])(\s?)([{DIGITS}]{{1,3}})(?![{DIGITS}])")  # digits after a word, maybe spaced
 _GLUED4 = re.compile(rf"(?<=[^\s{DIGITS}/\-(])([{DIGITS}]{{1,4}})(?=[\s.،؛:!?؟»«)\]°'‘’`\u200c]|$)")  # glued, up to 4 digits
 _LATIN_RUN = re.compile(r"[A-Za-z][A-Za-z\-]*")
+PERSON = "\ue001"  # before a note marker a person placed on the review panel: the linker takes it as given
+NOT_MARKER = "\ue002"  # before digits on a line whose markers a person set: text, not a marker
 _JUNK_AFTER = re.compile(r"[°'‘’`]+")  # what the OCR makes of the rest of a raised number
 
 
@@ -85,59 +87,162 @@ def _outline(labels_dir):
     return {(h["page"], h["row"], h["k"]): answer[h["id"]] for h in g.get("headings", []) if h["id"] in answer}
 
 
-def attach(pages, labels_dir):
+def attach(pages, labels_dir, reviewed=None):
     """Put the labels of LABELS_DIR on the pages and their lines; a heading the OCR missed becomes a line of its own.
-    -> the number of labelled pages."""
-    from .source import Line
-    outline = _outline(labels_dir)
+    REVIEWED: {pdf page: page labels} a person corrected on the review panel (`corrections.labels_for`): what they
+    changed (the fields a line lists in "h", the page's in the page's "h", the lines they added) goes on top of what
+    decides the page without them — a labeller's labels, else the converter's own rules — and is followed as given
+    (`_human`); everything else decides as it would without them. -> the number of pages a labeller labelled."""
+    outline = _outline(labels_dir) if labels_dir else {}
     count = 0
     for p in pages:
-        g = load_page(labels_dir, p.index)
-        if g is None:
+        human = (reviewed or {}).get(p.index)
+        g = load_page(labels_dir, p.index) if labels_dir else None
+        missing = []
+        if g is not None:
+            p.labelled = True
+            count += 1
+            page = g.get("page") or {}
+            p.label_type, p.label_pn = page.get("type", "other"), page.get("pn", "")
+            p.label_toc = g.get("toc") or []
+            p.label_marker_words = bool(g.get("markers_with_words"))  # the labeller named the word each marker follows
+            restored = []
+            for l in p.lines:
+                it = g["lines"].get(l.row)
+                def foreign(jt):  # a margin mark, or the number of another note than the line's own
+                    return jt.get("r") in ("header", "pagenum", "noise") or (
+                        jt.get("r") in ("note", "endnote") and jt.get("n") and it and it.get("n") and jt["n"] != it["n"])
+                if getattr(l, "unjoined", None) and any(foreign(g["lines"].get(jr) or {}) for jr in getattr(l, "joined", ())):
+                    l.text, l.words, l.bbox, box = l.unjoined  # the box joined to it does not belong to it: both as read
+                    l.joined = ()
+                    restored.append(box)
+                for jr in getattr(l, "joined", ()):  # a note number source.join_number_boxes put into this line: its label
+                    jt = g["lines"].get(jr)           # (a note starting, with its number) carries over
+                    if jt and jt.get("r") in ("note", "endnote") and jt.get("n"):
+                        if it is None or it.get("r") not in ("note", "endnote"):
+                            it = dict(jt)
+                        elif not it.get("n"):
+                            it = dict(it, n=jt["n"])
+                if it is not None:
+                    _set(l, it, outline.get((p.index, l.row, -1)))
+            for box in restored:  # with its own label
+                p.lines.append(box)
+                if g["lines"].get(box.row) is not None:
+                    _set(box, g["lines"][box.row], outline.get((p.index, box.row, -1)))
+            missing = g.get("missing") or []
+        if human is None:
+            _added(p, missing, outline, mine=False, labelled=g is not None)
             continue
-        p.labelled = True
-        count += 1
-        page = g.get("page") or {}
-        p.label_type, p.label_pn = page.get("type", "other"), page.get("pn", "")
-        p.label_toc = g.get("toc") or []
-        p.label_marker_words = bool(g.get("markers_with_words"))  # the labeller named the word each marker follows
-        restored = []
-        for l in p.lines:
-            it = g["lines"].get(l.row)
-            def foreign(jt):  # a margin mark, or the number of another note than the line's own
-                return jt.get("r") in ("header", "pagenum", "noise") or (
-                    jt.get("r") in ("note", "endnote") and jt.get("n") and it and it.get("n") and jt["n"] != it["n"])
-            if getattr(l, "unjoined", None) and any(foreign(g["lines"].get(jr) or {}) for jr in getattr(l, "joined", ())):
-                l.text, l.words, l.bbox, box = l.unjoined  # the box joined to it does not belong to it: both as read
-                l.joined = ()
-                restored.append(box)
-            for jr in getattr(l, "joined", ()):  # a note number source.join_number_boxes put into this line: its label
-                jt = g["lines"].get(jr)           # (a note starting, with its number) carries over
-                if jt and jt.get("r") in ("note", "endnote") and jt.get("n"):
-                    if it is None or it.get("r") not in ("note", "endnote"):
-                        it = dict(jt)
-                    elif not it.get("n"):
-                        it = dict(it, n=jt["n"])
-            if it is not None:
-                _set(l, it, outline.get((p.index, l.row, -1)))
-        for box in restored:  # with its own label
-            p.lines.append(box)
-            if g["lines"].get(box.row) is not None:
-                _set(box, g["lines"][box.row], outline.get((p.index, box.row, -1)))
+        p.reviewed = True
+        ph = set(human.get("h") or [])
+        p.human_page = ph
+        hp = human.get("page") or {}
+        if "type" in ph:
+            p.label_type = hp.get("type") or "other"
+        if "toc" in ph:
+            p.label_toc = human.get("toc") or []
+        p.snap = human["lines"]  # the converter's reading as the panel showed it (note numbers, paragraph starts)
         by_row = {l.row: l for l in p.lines}
-        for k, m in enumerate(g.get("missing") or []):
-            if m.get("r") not in ("heading", "byline") or not (m.get("t") or "").strip():
-                continue
-            below = by_row.get(m.get("before"))
-            if below is not None:
-                h = max(8, below.h)
-                box = (below.x0, max(0, below.y0 - 1.5 * h), below.x1, max(1, below.y0 - 0.3 * h))
-            else:
-                box = (0.25 * p.width, 0.04 * p.height, 0.75 * p.width, 0.07 * p.height)
-            line = Line(m["t"].strip(), tuple(int(v) for v in box), 100.0, [], row=-1)
-            _set(line, {"r": m["r"], "l": m.get("l") or 1}, outline.get((p.index, -1, k)))
-            p.lines.append(line)
+        notes = opens = False
+        for row, it in human["lines"].items():
+            if it.get("h") and by_row.get(row) is not None:
+                _human(by_row[row], it, labelled=g is not None)
+                notes |= _changes_notes(it)
+                opens |= _changes_title(it)
+        if "missing" in ph:  # the person's list: the labeller's headings they kept, the lines they added
+            missing = human.get("missing") or []
+        added = _added(p, missing, outline, mine="missing" in ph, labelled=g is not None)
+        p.human_notes = notes or any(l.forced in ("note", "endnote") for l in added)
+        p.title_changed = opens or any(l.forced == "heading" and getattr(l, "level", 0) == 1 for l in added)
     return count
+
+
+def _changes_notes(it):
+    """A person's change to a line that changes its page's notes: a note number, a role to or from a note."""
+    h, was = set(it.get("h") or []), it.get("was") or {}
+    return "n" in h or ("r" in h and bool({it.get("r"), was.get("r")} & {"note", "endnote"}))
+
+
+def _changes_title(it):
+    """A person's change to a line that changes a unit's title: a level-1 heading made, or made something else."""
+    h, was = set(it.get("h") or []), it.get("was") or {}
+    if not {"r", "l"} & h:
+        return False
+    old_r = was.get("r", it.get("r")) if "r" in h else it.get("r")
+    old_l = was.get("l", it.get("l")) if "l" in h else it.get("l")
+    return (it.get("r") == "heading" and it.get("l") == 1) or (old_r == "heading" and old_l == 1)
+
+
+def _added(p, missing, outline, mine, labelled):
+    """Lines the OCR missed, as lines of their own: the headings a labeller gave; MINE, every line a person added (one
+    the OCR missed, or the part of a line they split off, after its row). -> the lines."""
+    from .source import Line
+    by_row = {l.row: l for l in p.lines}
+    out = []
+    for k, m in enumerate(missing):
+        if not (m.get("t") or "").strip() or (not mine and m.get("r") not in ("heading", "byline")):
+            continue
+        above, below = by_row.get(m.get("after")), by_row.get(m.get("before"))
+        if above is not None:  # right after its row (in reading order, as `structure` sorts lines)
+            box = (above.x0, above.y0 + 1, above.x1, above.y1 + 1)
+        elif below is not None:
+            h = max(8, below.h)
+            box = (below.x0, max(0, below.y0 - 1.5 * h), below.x1, max(1, below.y0 - 0.3 * h))
+        else:
+            box = (0.25 * p.width, 0.04 * p.height, 0.75 * p.width, 0.07 * p.height)
+        line = Line(m["t"].strip(), tuple(int(v) for v in box), 100.0, [], row=-1)
+        if mine:
+            it = {key: m[key] for key in ("r", "l", "n", "p", "m", "a") if key in m}
+            it.setdefault("r", "body")
+            it.setdefault("p", False)
+            if it["r"] == "heading":
+                it.setdefault("l", 1)
+            it["h"] = sorted(it)  # all of it the person's
+            if labelled:
+                _set(line, it)
+            _human(line, it, labelled)
+        else:
+            _set(line, {"r": m["r"], "l": m.get("l") or 1}, outline.get((p.index, -1, k)))
+        line.missing_before, line.missing_after, line.missing_text = m.get("before"), m.get("after"), m["t"].strip()
+        p.lines.append(line)
+        out.append(line)
+    return out
+
+
+def _human(l, it, labelled=False):
+    """A person's changes to line L on the review panel: the fields IT lists in "h", put on top of what decides the
+    line otherwise (a labeller's labels, else the converter's rules) and followed as given (`forced`, `para_forced`,
+    the level, the note number, the markers, the text); the rest is left to decide as it would."""
+    h = set(it.get("h") or [])
+    l.forced_fields = h
+    r = it.get("r") or "other"
+    if "x" in h and isinstance(it.get("x"), str) and it["x"].strip():
+        l.ocr_text, l.text = getattr(l, "ocr_text", l.text), it["x"].strip()  # the text corrected by hand
+    if "p" in it:
+        l.para_snap = bool(it["p"])  # where the converter started a paragraph, as the panel showed it
+    if "p" in h:
+        l.para_forced = bool(it["p"])
+    if "r" in h:
+        l.forced = r
+        if labelled:
+            l.label_role = l.role = r
+        l.p_head = 1.0 if r == "heading" else 0.0
+        l.p_note = 1.0 if r == "note" else 0.0
+    if "l" in h or ("r" in h and r == "heading"):
+        l.level = int(it.get("l") or (2 if r == "heading" else 0))
+    if "n" in h or ("r" in h and r in ("note", "endnote")):
+        num = it.get("n")
+        l.note_num = int(num) if isinstance(num, int) and not isinstance(num, bool) else None
+    if {"m", "a"} & h:
+        l.markers = [int(k) for k in it.get("m") or [] if isinstance(k, int)]
+        words = it.get("a")
+        l.marker_words = [w for w in words if isinstance(w, str)] if isinstance(words, list) else []
+        l.label_m, l.label_a = list(l.markers), list(l.marker_words)
+
+
+def covered(pages, labels_dir):
+    """The PDF pages a labeller labelled (LABELS_DIR)."""
+    return {p.index for p in pages if load_page(labels_dir, p.index) is not None} if labels_dir else set()
 
 
 def _set(l, it, final=None):
@@ -155,8 +260,10 @@ def _set(l, it, final=None):
     l.markers = [int(k) for k in it.get("m") or [] if isinstance(k, int)]
     words = it.get("a")
     l.marker_words = [w for w in words if isinstance(w, str)] if isinstance(words, list) else []
+    l.label_m, l.label_a = list(l.markers), list(l.marker_words)  # as labelled (structure writes them into the text)
     if r in ("heading", "byline") and (it.get("t") or "").strip():
-        l.ocr_text, l.text = l.text, it["t"].strip()  # the labeller read the line as printed
+        l.ocr_text, l.text = getattr(l, "ocr_text", l.text), it["t"].strip()  # the labeller read the line as printed
+        l.label_t = it["t"].strip()
     l.p_head = 1.0 if l.label_role == "heading" else 0.0
     l.p_note = 1.0 if r == "note" else 0.0
     l.p_start = (0.5 if num is None else 1.0 if num and num > 0 else 0.0) if r == "note" else 0.0
@@ -176,7 +283,10 @@ def relayout(L, metrics):
     if not getattr(p, "labelled", False):
         return
     if L.kind != "text":
-        if any(_role(l) == "heading" for l in p.lines):  # a title page the layout took for a picture
+        person = getattr(p, "reviewed", False) and getattr(p, "label_type", "") not in ("figure", "blank", "cover") \
+            and any(getattr(l, "forced", None) not in (None, "figure", "table", "contents") + DROP
+                    for l in p.lines)  # a person read it as a page of text
+        if person or any(_role(l) == "heading" for l in p.lines):  # a title page the layout took for a picture
             L.kind = "text"
             L.body = [l for l in p.lines if _role(l) not in DROP]
         else:
@@ -211,6 +321,82 @@ def relayout(L, metrics):
     L.labelled = True
 
 
+def relayout_human(L, metrics):
+    """A page a person corrected that no labeller labelled: the lines whose role they set (and those they added) go
+    where the role says, the others stay where the layout put them; a page the layout took for a picture that they
+    read as text becomes text; its notes are split by their numbers as the panel showed them, where they changed
+    the page's notes."""
+    p = L.page
+    if not getattr(p, "reviewed", False) or getattr(p, "labelled", False):
+        return
+    moved = [l for l in p.lines if getattr(l, "forced", None) is not None]
+    out_roles = DROP + ("figure", "table", "contents")
+    if L.kind != "text" and getattr(p, "label_type", "") not in ("figure", "blank", "cover") \
+            and any(l.forced not in out_roles for l in moved):
+        L.kind = "text"  # a picture (or blank) to the layout, text to the person: the page's lines are its text
+        L.body = [l for l in p.lines if getattr(l, "forced", None) is None and l.row >= 0 and l.text.strip()]
+        L.regions = []
+        if L.body:
+            metrics(L)
+    gone = {id(l) for l in moved}
+    keep = lambda seq: [l for l in seq if id(l) not in gone]
+    L.body, L.notes = keep(L.body), keep(L.notes)
+    L.endnote_lines = keep(getattr(L, "endnote_lines", None) or [])
+    for r in L.regions:
+        r.lines = keep(r.lines)
+    for attr in ("header", "footer"):
+        x = getattr(L, attr, None)
+        if x is not None and any(id(y) in gone for y in getattr(x, "parts", None) or [x]):
+            setattr(L, attr, None)
+    for l in moved:
+        if l.forced == "note":
+            L.notes.append(l)
+        elif l.forced == "endnote":
+            L.endnote_lines.append(l)
+        elif l.forced not in out_roles:
+            L.body.append(l)
+    key = lambda l: (l.y0, -l.x1)
+    L.body.sort(key=key)
+    L.notes.sort(key=key)
+    L.endnote_lines.sort(key=key)
+    if getattr(p, "human_notes", False):
+        snap = getattr(p, "snap", None) or {}
+        for l in L.notes + L.endnote_lines:  # the numbers as the panel showed them, the person's where they set one
+            if "n" not in getattr(l, "forced_fields", ()) and getattr(l, "forced", None) not in ("note", "endnote"):
+                num = (snap.get(l.row) or {}).get("n")
+                l.note_num = int(num) if isinstance(num, int) and not isinstance(num, bool) else None
+        L.label_notes = split(L.notes)
+
+
+def human_openings(pages):
+    """{book page: start} for PAGES [(layout, book page)] where a person changed a unit's title line and no labeller
+    labelled the page: read as `openings` reads a labelled page, from the lines' roles and levels as they are now
+    (the person's, else the converter's as the panel showed them). A page with no unit's title at its head is left
+    out: the opening the converter made there goes."""
+    out = {}
+    for L, n in pages:
+        snap = getattr(L.page, "snap", None) or {}
+        saved = [(l, l.__dict__.get("label_role"), l.__dict__.get("level")) for l in L.body]
+        for l in L.body:
+            it = snap.get(l.row) or {}
+            l.label_role = getattr(l, "forced", None) or it.get("r") or "body"
+            if not ({"r", "l"} & getattr(l, "forced_fields", set())):
+                l.level = int(it.get("l") or 0) if l.label_role == "heading" else 0
+        was = getattr(L, "labelled", False)
+        L.labelled = True
+        try:
+            out.update(openings([(L, n)]))
+        finally:
+            L.labelled = was
+            for l, role, level in saved:
+                for attr, v in (("label_role", role), ("level", level)):
+                    if v is None:
+                        l.__dict__.pop(attr, None)
+                    else:
+                        setattr(l, attr, v)
+    return out
+
+
 def _rows(lines):
     rows = []
     for l in sorted(lines, key=lambda l: l.yc):
@@ -234,6 +420,7 @@ def split(lines):
         text = l.text.strip()
         k = getattr(l, "note_num", None)
         star = _STARS.match(text)
+        l.note_start = k if k and k > 0 else (len(star.group(1)) if star and not k else 0)
         if k and k > 0:
             rest = next((r for num, r, _ in candidates(text) if num == k), None)
             if rest is None:
@@ -257,6 +444,8 @@ def marked_text(l):
     all its notes (l.drop_marks, set by structure.text_page)."""
     from .markers import MARK  # not at the top: markers imports layout, which imports this module
     text, want = l.text, getattr(l, "markers", None)
+    if exact(l):
+        return _exact_markers(text, want or [], getattr(l, "marker_words", None) or [])
     if not want or (is_digits(text.strip()) and [int(ascii_digits(text.strip()))] == want):
         return text  # no markers, or a marker the OCR boxed apart as a line of its own
     words = getattr(l, "marker_words", None) or []
@@ -382,6 +571,67 @@ def _find_word(text, word, pos):
     return (where[j], where[j + len(target) - 1] + 1) if j >= 0 else None
 
 
+def exact(l):
+    """The line's note markers are a person's (review panel): the ones it has are all it has."""
+    return bool({"m", "a"} & getattr(l, "forced_fields", set()))
+
+
+def _exact_markers(text, want, words):
+    """TEXT with the note markers a person set on the review panel (WANT, each after its words in WORDS, as the panel
+    gives them: a run of words found once on the line): each right after its words and their closing punctuation, in
+    place of digits the OCR read there, or at the line's end when its words are no longer on the line (the text
+    corrected since), written after PERSON so the linker takes it as given. Copies of these numbers glued elsewhere on
+    the line go, and so do the image search's marks; other digits a marker could be read from stay as text
+    (NOT_MARKER before them)."""
+    from .markers import MARK
+    from .structure import _MARKER  # not at the top: structure imports this module
+    text, pos, spans = text.replace(MARK, ""), 0, []
+    for i, k in enumerate(want):
+        fk = fa_num(k)
+        raw = (words[i] if i < len(words) else "").strip()
+        hit = None
+        for w in dict.fromkeys((raw, raw.strip(_CLOSE + "«(“‘[ "))):  # as the panel gives them, then the words alone
+            if w and not is_digits(w):
+                hit = _find_word(text, w, pos) or _find_word(text, w, 0)
+                if hit is not None:
+                    break
+        if hit is None:
+            p = q = len(text.rstrip())
+            text = text[:p]
+        else:
+            p = q = hit[1]
+            while q < len(text) and text[q] in DIGITS:  # the OCR's digits right after the words: the marker as read
+                q += 1
+            if q == p:
+                while p < len(text) and text[p] in _CLOSE:
+                    p += 1
+                q = p
+                if text[q:q + 1] == " " and q + 1 < len(text) and text[q + 1] in DIGITS:  # "گفت. ۱۷": spaced
+                    r = q + 1
+                    while r < len(text) and text[r] in DIGITS:
+                        r += 1
+                    if r - q - 1 <= 4 and (r == len(text) or not text[r].isalpha()):
+                        q = r
+                while q < len(text) and text[q] in DIGITS:
+                    q += 1
+        text = text[:p] + PERSON + fk + text[q:]
+        end = p + 1 + len(fk)
+        if end < len(text) and text[end].isalpha():
+            text = text[:end] + " " + text[end:]  # the next word glued to the marker
+        spans.append((p, end, fk))
+        pos = end
+    placed = {fk for _, _, fk in spans}
+    cut = [m.span() for m in _GLUED.finditer(text)
+           if m.group(1) in placed and text[m.start() - 1] != PERSON]  # copies the OCR put elsewhere on the line
+    for a, b in reversed(cut):
+        text = text[:a] + text[b:]
+    keep = [m.start(g) for m in _MARKER.finditer(text) for g in (1, 2, 3, 4)
+            if m.group(g) and text[m.start(g) - 1:m.start(g)] != PERSON]
+    for a in reversed(keep):
+        text = text[:a] + NOT_MARKER + text[a:]
+    return text
+
+
 def _place_after_words(text, want, words):
     """TEXT with each marker of WANT written right after the word the labeller said it follows (WORDS, in order):
     after the word's closing punctuation, in place of digits the OCR glued or spaced there (the marker misread,
@@ -493,8 +743,9 @@ def openings(pages):
         # page to a reader of one page), else the page's
         kind = head.unit_kind if hasattr(head, "unit_kind") else ("part" if getattr(L.page, "label_type", "") == "part" else "")
         kind = "part" if kind == "part" else "chapter"
-        if kind == "part":
-            starts[n] = dict(kind="part", title=title, after_h2=[], bylines=[], rest=[])
+        if kind == "part":  # what the part's page prints under its title (a section's title, text) stays its text
+            starts[n] = dict(kind="part", title=title, after_h2=after, bylines=body[:first] + bylines,
+                             rest=body[first + len(run):])
             continue
         # a note marker on the unit's title: kept, so the displayed heading links the note, when the title lines are
         # the whole title (a line the outline set to level 0 is gone from them: then the outline's title is shown)

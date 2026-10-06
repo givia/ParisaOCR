@@ -1,91 +1,330 @@
-"""`parisaocr epub --review`: a local page where the reader marks the book's structure by hand.
+"""`parisaocr epub --review`: the review panel, a local page where a person checks the converted book and fixes it.
 
-Every page of the book is shown as a thumbnail in reading order with what the
-converter decided: part, chapter and section openings with their titles, and
-figure pages. The reader adds or removes openings, fixes a title (the OCR of
-the page's first lines is offered), sets the level, and rebuilds the EPUB;
-the marks are saved next to it (NAME.marks.json, see `marks`) and are used by
-every later conversion of the book. Three minutes for a book, and the chapters
-are right regardless of what the rules and models could see.
+The panel shows the book as the converter made it, page by page: every OCR line with what the converter decided
+(its role, a heading's level, a paragraph start, a note's number), how sure it is of that (`issues`), and the page as
+it reads in the EPUB. The person can change any of it, line by line or for the whole page: roles, levels, paragraph
+starts, note numbers, where a note's marker stands, a misread text, a heading the OCR missed, a contents page's
+entries, the page's printed number; and for the book: where its parts, chapters and sections open (the marks file,
+`marks`), its data (title, authors ...), its cover. The open issues come first, least sure first: notes without a
+marker, contents entries no heading matches, lines the models doubt, lines the OCR read uncertainly.
 
-The server binds 127.0.0.1 only: the page images never leave the machine.
+Corrections go to OUT/NAME.review.json (`corrections`) and the marks to OUT/NAME.marks.json; every later conversion
+of the book uses them. Rebuilding takes seconds: the OCR is kept.
+
+The server binds 127.0.0.1 only: the page images never leave the machine. It answers only requests that name it as
+their host (a page whose own domain is made to resolve to 127.0.0.1 is refused).
 """
 import http.server
-import io
 import json
+import mimetypes
 import os
 import pathlib
+import posixpath
+import re
 import threading
 import time
+import urllib.parse
 import webbrowser
+import zipfile
 
 from PIL import Image
 
-from . import marks as marks_mod
+from . import corrections, decisions, issues as issues_mod, marks as marks_mod, source
 from .. import progress
 
-THUMB, LARGE = 180, 1100  # thumbnail and page-view widths in pixels
+THUMB, LARGE = 180, 1400  # thumbnail and page-view widths in pixels
+STATIC = pathlib.Path(__file__).resolve().parent / "static"
+FONTS = pathlib.Path(__file__).resolve().parent.parent / "fonts"
+TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
+         ".xhtml": "application/xhtml+xml", ".ttf": "font/ttf", ".otf": "font/otf", ".jpg": "image/jpeg",
+         ".png": "image/png", ".svg": "image/svg+xml"}
+DIGITS_SPACE = re.compile(r"[\d۰-۹٠-٩\s]+")
 
 
-class Review:
-    """What the page shows and does. PAGES: [{pdf, n, kind, auto, lines, image}] in reading order
-    (`pages_of`); MARKS_PATH: the marks file; REBUILD(marks dict) -> {"epub", "summary"}."""
+class Panel:
+    """The review panel's state: the conversion result RES (`convert.convert`), REBUILD(marks dict) -> a new result,
+    CACHE_DIR for page images."""
 
-    def __init__(self, title, pages, marks_path, rebuild, cache_dir):
-        self.title, self.pages, self.marks_path, self.rebuild = title, pages, marks_path, rebuild
-        self.by_pdf = {p["pdf"]: p for p in pages}
+    def __init__(self, res, rebuild, cache_dir):
+        self.rebuild_fn = rebuild
         self.cache = pathlib.Path(cache_dir)
         self.cache.mkdir(parents=True, exist_ok=True)
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self.done = threading.Event()
+        self.building = False
+        self.load(res)
 
-    def state(self):
+    # --- the converted book ------------------------------------------------------------------------------------------
+
+    def load(self, res, seconds=None):
+        with self.lock:
+            self.res = res
+            self.book, self.ordered = res["book"], res["ordered"]
+            self.layouts = {L.page.index: L for L in res["layouts"]}
+            self.pages = {p.index: p for p in res["pages"]}
+            self.n_of = {L.page.index: n for L, n in self.ordered.pages}
+            self.pdf_of = {n: pdf for pdf, n in self.n_of.items()}
+            self.dec = decisions.collect(res["layouts"], self.book, self.ordered)
+            self.corr = corrections.load(res["corrections_path"])
+            self.marks_path = res["marks_path"]
+            self.built = time.time()
+            self.build_seconds = seconds
+            self.dirty = False
+            self._rows, self._infos, self._issues = {}, {}, None
+            self.hrefs = self._page_hrefs()
+
+    def _page_hrefs(self):
+        """{printed page: href in the EPUB} from its page-list."""
+        out = {}
+        try:
+            with zipfile.ZipFile(self.res["epub"]) as z:
+                nav = z.read("OEBPS/nav.xhtml").decode("utf-8")
+        except (OSError, KeyError, zipfile.BadZipFile):
+            return out
+        block = re.search(r'<nav epub:type="page-list".*?</nav>', nav, re.S)
+        for href, n in re.findall(r'href="([^"]+#page-(\d+))"', block.group(0) if block else ""):
+            out[int(n)] = "OEBPS/" + href
+        return out
+
+    def rows(self, pdf):
+        if pdf not in self._rows:
+            self._rows[pdf] = source.rows(self.res["ocr_dir"], pdf)
+        return self._rows[pdf]
+
+    def page_info(self, pdf):
+        """A page as the panel shows it: its lines with the current reading (the person's where they changed it),
+        the models' view, and the doubts."""
+        p, L, d = self.pages[pdf], self.layouts[pdf], self.dec[pdf]
+        rows = self.rows(pdf)
+        corr = self.corr["pages"].get(pdf)
+        line_of = {}
+        for l in p.lines:
+            for x in getattr(l, "parts", None) or [l]:
+                if x.row >= 0:
+                    line_of.setdefault(x.row, x)
+            for jr in getattr(l, "joined", ()):
+                line_of.setdefault(jr, l)
+        human = corrections._match([it for it in corr["lines"] if it.get("h")], rows) if corr else {}
+        lines = []
+        for r, row in sorted(rows.items()):
+            it = human.get(r)
+            base = d["lines"].get(r) or {"r": "noise"}  # the converter's reading now
+            cur = {k: base[k] for k in ("r", "l", "n", "p", "m", "a", "t") if k in base}
+            h = list((it or {}).get("h") or [])
+            for k in h:  # with the person's changes on top
+                if k == "x":
+                    continue
+                if k in it:
+                    cur[k] = it[k]
+                else:
+                    cur.pop(k, None)
+            l = line_of.get(r)
+            model = getattr(l, "model", None) if l is not None else None
+            rd = 0.0 if "r" in h else issues_mod.role_doubt(model, cur["r"])
+            td, weak = issues_mod.text_doubt(row["words"], row["conf"])
+            if "x" in h:
+                td = 0.0
+            lines.append({"row": r, "bbox": row["bbox"], "text": row["text"], "x": (it or {}).get("x"),
+                          "conf": row["conf"], "weak": weak, "words": row["words"], "d": cur, "h": h,
+                          "model": model, "doubt": {"role": rd, "text": td}})
+        page = {"type": d["type"], **({"pn": str(d["n"])} if d.get("n") else {})}
+        ph = list((corr or {}).get("h") or [])
+        for k in ph:  # what the person set for the page
+            if k in (corr.get("page") or {}):
+                page[k] = corr["page"][k]
+        return {"pdf": pdf, "n": d["n"], "kind": d["kind"], "type": page.get("type", d["type"]), "page": page,
+                "page_h": ph, "width": p.width, "height": p.height,
+                "reviewed": corr is not None, "quality": getattr(L, "quality", None), "lines": lines,
+                "regions": [{"kind": r.kind, "bbox": [int(v) for v in r.bbox]} for r in L.regions],
+                "crop": [int(v) for v in L.crop] if getattr(L, "crop", None) else None, "rotate": getattr(L, "rotate", 0),
+                "left": None if pdf in self.n_of else dict(zip(("kept", "number"), next(
+                    ((k, n) for x, k, n in self.ordered.duplicates if x == pdf), (None, None)))),
+                "missing": (corr if "missing" in ph else d).get("missing") or [],
+                "toc": (corr if "toc" in ph else d).get("toc") or [],
+                "href": self.href_of(pdf)}
+
+    def page_infos(self):
+        """Every page's info, kept until a change touches the page."""
+        for pdf in self.pages:
+            if pdf not in self._infos:
+                self._infos[pdf] = self.page_info(pdf)
+        return {pdf: self._infos[pdf] for pdf in sorted(self.pages)}
+
+    def href_of(self, pdf):
+        n = self.n_of.get(pdf)
+        if n is None or not self.hrefs:
+            return None
+        if n in self.hrefs:
+            return self.hrefs[n]
+        lower = [k for k in self.hrefs if k <= n]
+        return self.hrefs[max(lower)] if lower else self.hrefs[min(self.hrefs)]
+
+    def notes_by_pdf(self):
+        unlinked = {(n, num) for n, num, _ in self.book.report.get("unlinked_notes", [])}
+        out = {}
+        for ch in self.book.chapters:
+            for note in ch.notes:
+                pdf = self.pdf_of.get(note.page)
+                if pdf is None:
+                    continue
+                endnote = note.id.startswith("e")
+                how = "endnote" if endnote else "end of page" if (note.page, note.num) in unlinked else "marker"
+                out.setdefault(pdf, []).append({"num": note.num, "text": note.text, "how": how, "id": note.id})
+        return out
+
+    def issues(self):
+        if self._issues is None:
+            self._issues = issues_mod.find(self)
+        return self._issues
+
+    def book_info(self):
+        infos = self.page_infos()
+        iss = self.issues()
+        per_page = {}
+        for x in iss:
+            if not x["ignored"] and x["pdf"] is not None:
+                per_page[x["pdf"]] = per_page.get(x["pdf"], 0) + 1
+        pages = []
+        for pdf, info in infos.items():
+            doubts = [max(v for v in ln["doubt"].values() if v is not None) for ln in info["lines"]
+                      if any(v is not None for v in ln["doubt"].values())]
+            pages.append({"pdf": pdf, "n": info["n"], "kind": info["kind"], "type": info["type"],
+                          "reviewed": info["reviewed"], "doubt": round(max(doubts, default=0.0), 3),
+                          "unsure": sum(v >= 0.5 for v in doubts), "check": sum(0.2 <= v < 0.5 for v in doubts),
+                          "issues": per_page.get(pdf, 0)})
         saved = marks_mod.load(self.marks_path)
-        current = saved["pages"] if saved else {str(p["pdf"]): p["auto"] for p in self.pages if p["auto"]}
-        return {"title": self.title, "pages": [{k: v for k, v in p.items() if k != "image"} for p in self.pages],
-                "marks": current, "reviewed": bool(saved), "marks_path": str(self.marks_path)}
+        auto = self.book.report.get("starts", {})
+        units = saved["pages"] if saved else {int(k): v for k, v in auto.items()}
+        chapters = [{"pdf": pdf, "n": self.n_of.get(pdf), "kind": v["kind"], "title": v.get("title", "")}
+                    for pdf, v in sorted(units.items())]
+        sections = [{"pdf": self.pdf_of.get(n), "n": n, "title": t} for n, t, _ in self.book.report.get("headings", [])]
+        meta = dict(self.res.get("meta") or {})
+        cover = (self.corr["book"] or {}).get("cover")
+        if cover is None and self.book.cover:
+            cover = self.book.cover[0].page.index
+        return {"title": self.res.get("title") or meta.get("title", ""), "epub": str(self.res["epub"]),
+                "built": self.built, "seconds": self.build_seconds, "dirty": self.dirty, "building": self.building,
+                "pages": pages, "chapters": chapters, "marked": bool(saved), "sections": sections,
+                "meta": meta, "meta_h": (self.corr["book"] or {}).get("meta") or {}, "cover": cover,
+                "contents": [{"title": e.title, "page": e.page, "level": e.level, "list": e.list} for e in self.book.toc],
+                "summary": self.res.get("summary", ""), "issues": sum(1 for x in iss if not x["ignored"]),
+                "reviewed": len(self.corr["pages"]), "history": len(self.corr["history"])}
+
+    # --- changes -----------------------------------------------------------------------------------------------------
+
+    def _changed(self, pdfs=None):
+        """Save the corrections; the pages PDFS (all when None) are shown anew."""
+        corrections.save(self.res["corrections_path"], self.corr)
+        self.dirty = True
+        if pdfs is None:
+            self._infos = {}
+        else:
+            for pdf in pdfs:
+                self._infos.pop(pdf, None)
+        self._issues = None
+
+    def edit_page(self, pdf, edits):
+        with self.lock:
+            corrections.edit_page(self.corr, pdf, self.dec[pdf], self.rows(pdf), edits)
+            self._sync_marks(pdf, edits)
+            self._changed([pdf])
+            return self.page_info(pdf)
+
+    def _sync_marks(self, pdf, edits):
+        """Once the list of parts and chapters is saved (the marks file), it alone decides them: a line made a level-1
+        heading on a page not in the list adds the page to it, as a chapter titled by its level-1 lines."""
+        saved = marks_mod.load(self.marks_path)
+        if not saved or pdf in saved["pages"]:
+            return
+        lines = (self.corr["pages"].get(pdf) or {}).get("lines", [])
+        touched = {int(r) for r, f in (edits.get("lines") or {}).items() if {"r", "l"} & set(f or {})}
+        heads = [it for it in lines if it["i"] in touched and it.get("r") == "heading" and it.get("l") == 1]
+        if heads:
+            title = " ".join((it.get("x") or it.get("t") or it.get("o") or "").strip()
+                             for it in sorted(lines, key=lambda it: it["b"][1]) if it.get("r") == "heading" and it.get("l") == 1)
+            pages = dict(saved["pages"])
+            pages[pdf] = {"kind": "chapter", "title": title}
+            marks_mod.save(self.marks_path, pages, self.book.report.get("starts", {}))
+
+    def revert_page(self, pdf):
+        with self.lock:
+            corrections.revert_page(self.corr, pdf)
+            self._changed([pdf])
+            return self.page_info(pdf)
+
+    def edit_book(self, edits):
+        with self.lock:
+            corrections.edit_book(self.corr, edits)
+            self._changed([])
+
+    def bulk(self, text, edits):
+        """Set EDITS ({field: value}) on every line of the book whose text is TEXT (digits and spaces ignored): a
+        running header repeated on every page, a stamp. -> the pages changed."""
+        key = DIGITS_SPACE.sub("", text)
+        changed = []
+        if not key:
+            return changed
+        with self.lock:
+            for pdf in sorted(self.pages):
+                rows = self.rows(pdf)
+                hits = [r for r, row in rows.items() if DIGITS_SPACE.sub("", row["text"]) == key]
+                if hits:
+                    corrections.edit_page(self.corr, pdf, self.dec[pdf], rows, {"lines": {r: dict(edits) for r in hits}})
+                    changed.append(pdf)
+            if changed:
+                self._changed(changed)
+        return changed
+
+    def undo(self):
+        with self.lock:
+            entry = corrections.undo(self.corr)
+            if entry is not None:
+                self._changed([entry["pdf"]] if "pdf" in entry else [])
+            return entry
+
+    def ignore(self, issue_id, ignored):
+        with self.lock:
+            ign = set(self.corr.get("ignored") or [])
+            (ign.add if ignored else ign.discard)(issue_id)
+            self.corr["ignored"] = sorted(ign)
+            corrections.save(self.res["corrections_path"], self.corr)
+            self._issues = None
+
+    def save_marks(self, pages):
+        with self.lock:
+            marks_mod.save(self.marks_path, pages, self.book.report.get("starts", {}))
+            self.dirty = True
+
+    def rebuild(self):
+        with self.lock:
+            if self.building:
+                raise RuntimeError("a rebuild is running")
+            self.building = True
+        t0 = time.time()
+        try:
+            res = self.rebuild_fn(marks_mod.load(self.marks_path))
+            self.load(res, round(time.time() - t0, 1))
+        finally:
+            self.building = False
+        return {"epub": str(self.res["epub"]), "summary": self.res.get("summary", ""), "seconds": self.build_seconds}
+
+    # --- images ------------------------------------------------------------------------------------------------------
 
     def image(self, pdf, width):
-        page = self.by_pdf.get(pdf)
+        page = self.pages.get(pdf)
         if page is None:
             return None
         f = self.cache / f"p-{pdf:03d}-{width}.jpg"
         if not f.exists():
-            with Image.open(page["image"]) as im:
-                im = im.convert("L") if im.mode == "1" else im
+            with Image.open(page.image) as im:
+                im = im.convert("L") if im.mode in ("1", "I;16", "I") else im
                 im.thumbnail((width, width * 3))
-                im.convert("RGB").save(f, "JPEG", quality=80)
+                im.convert("RGB").save(f, "JPEG", quality=82)
         return f.read_bytes()
-
-    def save(self, pages):
-        with self.lock:
-            marks_mod.save(self.marks_path, pages, {str(p["pdf"]): p["auto"] for p in self.pages if p["auto"]})
-
-    def build(self, pages):
-        self.save(pages)
-        t0 = time.time()
-        with self.lock:
-            out = self.rebuild(marks_mod.load(self.marks_path))
-        out["seconds"] = round(time.time() - t0, 1)
-        return out
-
-
-def pages_of(ordered, book, layouts):
-    """The review's page list from a conversion: reading order, the converter's own decisions as `auto`."""
-    auto = book.report.get("starts", {})
-    out = []
-    for L, n in ordered.pages:
-        p = L.page
-        lines = [l.text for l in sorted(L.body, key=lambda l: l.y0) if l.conf >= 70][:5]
-        a = auto.get(p.index)
-        if a is None and L.kind == "figure":
-            a = {"kind": "figure", "title": ""}
-        out.append({"pdf": p.index, "n": n, "kind": L.kind, "auto": a, "lines": lines, "image": str(p.image)})
-    return out
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
-    review = None  # set by `serve`
+    review = None  # the Panel, set by `start`
 
     def log_message(self, *args):
         pass
@@ -93,6 +332,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def _send(self, body, kind="application/json; charset=utf-8", code=200):
         if isinstance(body, (dict, list)):
             body = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        elif isinstance(body, str):
+            body = body.encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", kind)
         self.send_header("Content-Length", str(len(body)))
@@ -113,59 +354,112 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not self._local():
             return
         r = self.review
-        path, _, query = self.path.partition("?")
-        if path == "/":
-            self._send(PAGE.encode("utf-8"), "text/html; charset=utf-8")
-        elif path == "/api/state":
-            self._send(r.state())
-        elif path.startswith("/img/"):
-            try:
+        url = urllib.parse.urlsplit(self.path)
+        path, query = url.path, urllib.parse.parse_qs(url.query)
+        try:
+            if path in ("/", "/index.html"):
+                return self._send((STATIC / "panel.html").read_bytes(), TYPES[".html"])
+            if path.startswith("/static/"):
+                name = path[len("/static/"):]
+                f = FONTS / name[6:] if name.startswith("fonts/") else STATIC / name
+                if "/" in name.removeprefix("fonts/") or not f.is_file():
+                    return self._send(b"not found", "text/plain", 404)
+                return self._send(f.read_bytes(), TYPES.get(f.suffix, "application/octet-stream"))
+            if path in ("/api/book", "/api/state"):
+                return self._send(r.book_info())
+            if path == "/api/issues":
+                return self._send(r.issues())
+            m = re.fullmatch(r"/api/page/(\d+)", path)
+            if m:
+                pdf = int(m.group(1))
+                if pdf not in r.pages:
+                    return self._send(b"no such page", "text/plain", 404)
+                info = r.page_info(pdf)
+                info["notes"] = r.notes_by_pdf().get(pdf, [])
+                info["issues"] = [x for x in r.issues() if x["pdf"] == pdf]
+                return self._send(info)
+            if path.startswith("/img/"):
                 pdf = int(path[5:].split(".")[0])
-                width = LARGE if "large" in query else THUMB
-                data = r.image(pdf, width)
-            except (ValueError, OSError):
-                data = None
-            if data is None:
-                self._send(b"no such page", "text/plain", 404)
-            else:
-                self._send(data, "image/jpeg")
-        else:
-            self._send(b"not found", "text/plain", 404)
+                width = int(query.get("w", [LARGE if "large" in query else THUMB])[0])
+                data = r.image(pdf, max(80, min(width, 2400)))
+                if data is None:
+                    return self._send(b"no such page", "text/plain", 404)
+                return self._send(data, "image/jpeg")
+            if path.startswith("/epub/"):
+                inner = posixpath.normpath(urllib.parse.unquote(path[len("/epub/"):]))
+                try:
+                    with zipfile.ZipFile(r.res["epub"]) as z:
+                        data = z.read(inner)
+                except (KeyError, OSError, zipfile.BadZipFile):
+                    return self._send(b"not found", "text/plain", 404)
+                kind = TYPES.get(posixpath.splitext(inner)[1].lower()) or mimetypes.guess_type(inner)[0] or "application/octet-stream"
+                return self._send(data, kind)
+            return self._send(b"not found", "text/plain", 404)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception as e:  # noqa: BLE001  the page shows it; the server stays up
+            self._send({"ok": False, "error": f"{type(e).__name__}: {e}"}, code=500)
 
     def do_POST(self):
         if not self._local():
             return
         r = self.review
         n = int(self.headers.get("Content-Length") or 0)
-        body = json.loads(self.rfile.read(n).decode("utf-8") or "{}")
-        if self.path == "/api/marks":
-            r.save(body.get("pages", {}))
-            self._send({"ok": True})
-        elif self.path == "/api/build":
-            try:
-                out = r.build(body.get("pages", {}))
-                self._send({"ok": True, **out})
-            except Exception as e:  # the page shows the error; the server stays up
-                self._send({"ok": False, "error": f"{type(e).__name__}: {e}"})
-        elif self.path == "/api/quit":
-            self._send({"ok": True})
-            r.done.set()
-        else:
-            self._send(b"not found", "text/plain", 404)
+        try:
+            body = json.loads(self.rfile.read(n).decode("utf-8") or "{}") if n else {}
+            path = urllib.parse.urlsplit(self.path).path
+            m = re.fullmatch(r"/api/page/(\d+)(/(revert|accept))?", path)
+            if m:
+                pdf = int(m.group(1))
+                if pdf not in r.pages:
+                    return self._send({"ok": False, "error": "no such page"}, code=404)
+                if m.group(3) == "revert":
+                    info = r.revert_page(pdf)
+                else:
+                    info = r.edit_page(pdf, body if m.group(3) is None else {})
+                return self._send({"ok": True, "page": info})
+            if path == "/api/book":
+                r.edit_book(body)
+                return self._send({"ok": True})
+            if path == "/api/bulk":
+                return self._send({"ok": True, "pages": r.bulk(body.get("text", ""), body.get("edits") or {})})
+            if path == "/api/marks":
+                r.save_marks(body.get("pages", {}))
+                return self._send({"ok": True})
+            if path == "/api/undo":
+                entry = r.undo()
+                return self._send({"ok": True, "undone": {k: v for k, v in entry.items() if k in ("pdf", "when")}
+                                   if entry else None})
+            if path == "/api/ignore":
+                r.ignore(body.get("id", ""), bool(body.get("ignored", True)))
+                return self._send({"ok": True})
+            if path in ("/api/rebuild", "/api/build"):
+                if body.get("pages") is not None:  # marks sent with the rebuild
+                    r.save_marks(body["pages"])
+                return self._send({"ok": True, **r.rebuild()})
+            if path == "/api/quit":
+                r.done.set()
+                return self._send({"ok": True})
+            return self._send({"ok": False, "error": "not found"}, code=404)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception as e:  # noqa: BLE001
+            self._send({"ok": False, "error": f"{type(e).__name__}: {e}"}, code=500)
 
 
 def start(review, port=0):
-    """The review server on 127.0.0.1:PORT (0: any free port), in a daemon thread -> (server, url)."""
+    """The panel's server on 127.0.0.1:PORT (0: any free port), in a daemon thread -> (server, url)."""
     Handler.review = review
     server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    server.daemon_threads = True
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server, f"http://127.0.0.1:{server.server_address[1]}/"
 
 
 def serve(review, port=0, open_browser=True):
-    """Serve the review page on 127.0.0.1 until the reader clicks Done (or Ctrl-C)."""
+    """Serve the review panel on 127.0.0.1 until the person clicks Done (or Ctrl-C)."""
     server, url = start(review, port)
-    print(f"parisaocr: review page at {url} (mark the openings, then Rebuild; Done closes it)", flush=True)
+    print(f"parisaocr: review panel at {url} (fix what needs fixing, then Rebuild; Done closes it)", flush=True)
     progress.emit("review", url=url)
     if open_browser and os.environ.get("PARISAOCR_NO_BROWSER") != "1":  # the app shows the page itself
         try:
@@ -177,206 +471,6 @@ def serve(review, port=0, open_browser=True):
             pass
     except KeyboardInterrupt:
         pass
+    time.sleep(0.3)  # let the reply to Done reach the page
     server.shutdown()
     return url
-
-
-PAGE = r"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ParisaOCR review</title>
-<style>
-:root { --chapter: #2e7d32; --part: #6a1b9a; --section: #1565c0; --figure: #ef6c00; --bg: #fafafa; --ink: #222; }
-* { box-sizing: border-box; }
-body { margin: 0; font: 14px/1.4 system-ui, sans-serif; color: var(--ink); background: var(--bg); display: grid;
-       grid-template-rows: auto 1fr; grid-template-columns: 1fr 380px; height: 100vh; }
-header { grid-column: 1 / 3; display: flex; gap: 16px; align-items: center; padding: 8px 14px; background: #fff;
-         border-bottom: 1px solid #ddd; }
-header h1 { font-size: 16px; margin: 0; font-weight: 600; }
-header .counts { color: #666; }
-header .spacer { flex: 1; }
-button { font: inherit; padding: 6px 12px; border: 1px solid #bbb; border-radius: 6px; background: #fff; cursor: pointer; }
-button.primary { background: var(--chapter); color: #fff; border-color: var(--chapter); }
-button:disabled { opacity: .5; cursor: default; }
-#grid { overflow: auto; padding: 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px;
-        align-content: start; }
-.tile { position: relative; border: 3px solid transparent; border-radius: 6px; background: #fff; cursor: pointer;
-        box-shadow: 0 1px 2px rgba(0,0,0,.15); }
-.tile img { display: block; width: 100%; height: auto; border-radius: 3px; }
-.tile .num { position: absolute; top: 4px; left: 4px; background: rgba(0,0,0,.6); color: #fff; font-size: 11px;
-             padding: 1px 5px; border-radius: 3px; }
-.tile .label { position: absolute; left: 0; right: 0; bottom: 0; font-size: 11px; padding: 2px 5px; color: #fff;
-               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; border-radius: 0 0 3px 3px; }
-.tile.chapter { border-color: var(--chapter); } .tile.chapter .label { background: var(--chapter); }
-.tile.part { border-color: var(--part); } .tile.part .label { background: var(--part); }
-.tile.section { border-color: var(--section); } .tile.section .label { background: var(--section); }
-.tile.figure { border-color: var(--figure); } .tile.figure .label { background: var(--figure); }
-.tile.selected { outline: 3px solid #111; outline-offset: 1px; }
-aside { border-left: 1px solid #ddd; background: #fff; overflow: auto; display: flex; flex-direction: column; }
-#detail { padding: 12px; border-bottom: 1px solid #eee; }
-#detail img { width: 100%; height: auto; border: 1px solid #ddd; margin-bottom: 8px; cursor: zoom-in; }
-#detail .kinds { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
-#detail .kinds label { border: 1px solid #ccc; border-radius: 6px; padding: 4px 8px; cursor: pointer; }
-#detail .kinds input { margin-right: 4px; }
-#title { width: 100%; font: inherit; font-size: 16px; padding: 6px; direction: rtl; }
-.sugg { direction: rtl; text-align: right; color: #444; cursor: pointer; padding: 3px 6px; border-radius: 4px; }
-.sugg:hover { background: #eef; }
-#toc { padding: 12px; direction: rtl; text-align: right; }
-#toc h2 { font-size: 13px; color: #666; margin: 0 0 6px; direction: ltr; text-align: left; }
-#toc div { padding: 2px 0; cursor: pointer; }
-#toc .part { font-weight: 600; color: var(--part); }
-#toc .section { padding-right: 18px; color: var(--section); }
-#toc .page { color: #999; font-size: 12px; margin-left: 6px; }
-#status { color: #666; font-size: 13px; }
-#zoom { position: fixed; inset: 0; background: rgba(0,0,0,.85); display: none; align-items: center; justify-content: center; }
-#zoom img { max-width: 96vw; max-height: 96vh; }
-kbd { border: 1px solid #ccc; border-radius: 3px; padding: 0 4px; font-size: 12px; background: #f5f5f5; }
-</style>
-</head>
-<body>
-<header>
-  <h1 id="book"></h1>
-  <span class="counts" id="counts"></span>
-  <span class="spacer"></span>
-  <span id="status"></span>
-  <button id="rebuild" class="primary">Rebuild EPUB</button>
-  <button id="done">Done</button>
-</header>
-<main id="grid"></main>
-<aside>
-  <div id="detail"><em>Click a page. <kbd>←</kbd> <kbd>→</kbd> move, <kbd>Space</kbd> chapter on/off, <kbd>Enter</kbd> edit the title.</em></div>
-  <div id="toc"><h2>Table of contents</h2><div id="toclist"></div></div>
-</aside>
-<div id="zoom"><img id="zoomimg" alt=""></div>
-<script>
-const KINDS = ["none", "part", "chapter", "section", "figure"];
-let state = null, marks = {}, selected = null, saveTimer = null;
-
-async function api(path, body) {
-  const r = await fetch(path, body ? {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)} : {});
-  return r.json();
-}
-function kindOf(pdf) { const m = marks[pdf]; return m ? m.kind : "none"; }
-function titleOf(pdf) { const m = marks[pdf]; return m && m.title ? m.title : ""; }
-
-function render() {
-  const grid = document.getElementById("grid");
-  if (!grid.children.length) {
-    for (const p of state.pages) {
-      const t = document.createElement("div");
-      t.className = "tile"; t.dataset.pdf = p.pdf;
-      t.innerHTML = `<img loading="lazy" src="/img/${p.pdf}.jpg" alt=""><span class="num">${p.n}</span><span class="label"></span>`;
-      t.onclick = () => select(p.pdf);
-      grid.appendChild(t);
-    }
-  }
-  for (const t of grid.children) {
-    const pdf = +t.dataset.pdf, k = kindOf(pdf);
-    t.className = "tile " + (k === "none" ? "" : k) + (pdf === selected ? " selected" : "");
-    t.querySelector(".label").textContent = k === "none" ? "" : (titleOf(pdf) || k);
-  }
-  const n = Object.values(marks);
-  document.getElementById("counts").textContent =
-    `${state.pages.length} pages · ${n.filter(m => m.kind === "part").length} parts · ${n.filter(m => m.kind === "chapter").length} chapters · ` +
-    `${n.filter(m => m.kind === "section").length} sections · ${n.filter(m => m.kind === "figure").length} figures`;
-  renderToc();
-}
-
-function renderToc() {
-  const list = document.getElementById("toclist");
-  list.innerHTML = "";
-  const byPdf = Object.fromEntries(state.pages.map(p => [p.pdf, p]));
-  for (const p of state.pages) {
-    const k = kindOf(p.pdf);
-    if (k === "none" || k === "figure") continue;
-    const d = document.createElement("div");
-    d.className = k;
-    d.innerHTML = `${titleOf(p.pdf) || "(untitled)"}<span class="page">${p.n}</span>`;
-    d.onclick = () => select(p.pdf);
-    list.appendChild(d);
-  }
-  if (!list.children.length) list.innerHTML = "<em>No openings marked yet.</em>";
-}
-
-function select(pdf) {
-  selected = pdf;
-  const p = state.pages.find(x => x.pdf === pdf);
-  const k = kindOf(pdf);
-  const d = document.getElementById("detail");
-  d.innerHTML = `
-    <div><b>PDF page ${p.pdf}</b> · book page ${p.n} · ${p.kind}${p.auto ? ` · the converter said: <i>${p.auto.kind}${p.auto.title ? " — " + p.auto.title : ""}</i>` : ""}</div>
-    <img id="pageimg" src="/img/${p.pdf}.jpg?large" alt="">
-    <div class="kinds">${KINDS.map(x => `<label><input type="radio" name="kind" value="${x}" ${x === k ? "checked" : ""}>${x}</label>`).join("")}</div>
-    <input id="title" placeholder="title as it should appear in the contents" value="${esc(titleOf(pdf))}" ${k === "none" || k === "figure" ? "disabled" : ""}>
-    <div id="sugg">${p.lines.map(l => `<div class="sugg" title="use as title">${esc(l)}</div>`).join("")}</div>`;
-  d.querySelectorAll("input[name=kind]").forEach(r => r.onchange = () => setKind(pdf, r.value));
-  d.querySelector("#title").oninput = e => { setTitle(pdf, e.target.value); };
-  d.querySelectorAll(".sugg").forEach(s => s.onclick = () => {
-    const cur = d.querySelector("#title");
-    if (cur.disabled) setKind(pdf, "chapter");
-    const t = document.getElementById("title");
-    t.value = t.value ? t.value + " " + s.textContent : s.textContent;
-    setTitle(pdf, t.value);
-  });
-  d.querySelector("#pageimg").onclick = () => { document.getElementById("zoomimg").src = `/img/${p.pdf}.jpg?large`; document.getElementById("zoom").style.display = "flex"; };
-  render();
-  const tile = document.querySelector(`.tile[data-pdf="${pdf}"]`);
-  if (tile) tile.scrollIntoView({block: "nearest"});
-}
-
-function esc(s) { return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;"); }
-
-function setKind(pdf, kind) {
-  if (kind === "none") delete marks[pdf];
-  else marks[pdf] = {kind, title: kind === "figure" ? "" : titleOf(pdf)};
-  const p = state.pages.find(x => x.pdf === pdf);
-  if (kind !== "none" && kind !== "figure" && !marks[pdf].title && p.auto && p.auto.title) marks[pdf].title = p.auto.title;
-  select(pdf);
-  if (kind !== "none" && kind !== "figure") { const t = document.getElementById("title"); t.focus(); }
-  queueSave();
-}
-function setTitle(pdf, title) { if (marks[pdf]) { marks[pdf].title = title; render(); queueSave(); } }
-
-function queueSave() {
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(async () => { await api("/api/marks", {pages: marks}); setStatus("marks saved"); }, 600);
-}
-function setStatus(s) { document.getElementById("status").textContent = s; }
-
-document.getElementById("rebuild").onclick = async () => {
-  const b = document.getElementById("rebuild");
-  b.disabled = true; setStatus("rebuilding the EPUB…");
-  const r = await api("/api/build", {pages: marks});
-  b.disabled = false;
-  setStatus(r.ok ? `EPUB rebuilt in ${r.seconds} s → ${r.epub}` : `failed: ${r.error}`);
-  if (r.ok && r.summary) alert(r.summary);
-};
-document.getElementById("done").onclick = async () => { await api("/api/marks", {pages: marks}); await api("/api/quit", {}); setStatus("closed — you can close this tab"); };
-document.getElementById("zoom").onclick = () => { document.getElementById("zoom").style.display = "none"; };
-
-document.addEventListener("keydown", e => {
-  if (e.target.tagName === "INPUT" && e.key !== "Escape") { if (e.key === "Enter") e.target.blur(); return; }
-  if (selected === null) return;
-  const i = state.pages.findIndex(p => p.pdf === selected);
-  if (e.key === "ArrowRight" && i + 1 < state.pages.length) select(state.pages[i + 1].pdf);
-  else if (e.key === "ArrowLeft" && i > 0) select(state.pages[i - 1].pdf);
-  else if (e.key === " ") { e.preventDefault(); setKind(selected, kindOf(selected) === "chapter" ? "none" : "chapter"); }
-  else if (e.key === "Enter") { const t = document.getElementById("title"); if (t && !t.disabled) t.focus(); }
-  else if (e.key === "Escape") { document.getElementById("zoom").style.display = "none"; }
-});
-
-(async () => {
-  state = await api("/api/state");
-  marks = {};
-  for (const [k, v] of Object.entries(state.marks)) marks[+k] = {kind: v.kind, title: v.title || ""};
-  document.getElementById("book").textContent = state.title;
-  document.title = `${state.title} — ParisaOCR review`;
-  setStatus(state.reviewed ? "marks loaded from " + state.marks_path : "showing the converter's decisions; nothing saved yet");
-  render();
-})();
-</script>
-</body>
-</html>
-"""

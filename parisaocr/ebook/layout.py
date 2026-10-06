@@ -163,7 +163,7 @@ def orient_figures(layouts, ocr_dir, read):
     90° each way, and a turn wins when ParisaOCR reads at least twice as much text with confidence.
     (Tesseract's orientation detection misjudges the small labels of Persian maps.)
     READ(inputs, out_dir, formats) runs ParisaOCR, as `convert` sets it up."""
-    figs = [L for L in layouts if L.kind == "figure"]
+    figs = [L for L in layouts if L.kind == "figure" and not getattr(L, "rotate_by_hand", False)]
     rot = pathlib.Path(ocr_dir) / "rotated"
     rot.mkdir(parents=True, exist_ok=True)
     todo = []
@@ -387,7 +387,9 @@ def _joined(row):
     if len(row) == 1:
         return row[0]
     box = (min(l.x0 for l in row), min(l.y0 for l in row), max(l.x1 for l in row), max(l.y1 for l in row))
-    return Line(" ".join(l.text for l in row), box, min(l.conf for l in row), [w for l in row for w in l.words])
+    joined = Line(" ".join(l.text for l in row), box, min(l.conf for l in row), [w for l in row for w in l.words])
+    joined.parts = [x for l in row for x in (getattr(l, "parts", None) or [l])]  # the OCR lines it joins
+    return joined
 
 
 def _overlaps(a, b):
@@ -460,7 +462,7 @@ def head_hints(pages, hints_dir):
     return f"headings from {hints_dir.parent.name} ({pages_hinted} pages, {heads} heading lines)"
 
 
-def analyze_all(pages, roles_dir=None, report=None, labels_dir=None):
+def analyze_all(pages, roles_dir=None, report=None, labels_dir=None, reviewed=None, confidence=False):
     """Analyze every page. Headers are recognized by a page number or by text repeated on 3+ other pages.
     Where a header or a page number may sit depends on the scan's margins: the zones are set from where
     the first and the last line of a usual page of this book lie.
@@ -470,22 +472,30 @@ def analyze_all(pages, roles_dir=None, report=None, labels_dir=None):
     the book's directory name), or "none" for the rules alone. REPORT, a dict, collects "stamps" (the stamps
     burned into the scans that were left out, `burned_stamps`) and "roles" (which models were used).
     LABELS_DIR (or PARISAOCR_LABELS, "{slug}" as above): a page labeller's labels (`labels`), which then decide
-    the structure of the pages they cover; the line-role models are not used."""
+    the structure of the pages they cover; the line-role models decide the others. REVIEWED: the pages a person
+    corrected (`corrections.labels_for`): what the person changed, on top of what decides them otherwise. CONFIDENCE: the models also run on labelled pages,
+    without deciding, for the review panel's confidence."""
     found = burned_stamps(pages)
     slug = pages[0].image.resolve().parents[3].name if pages else ""
     labels_dir = labels_dir or os.environ.get("PARISAOCR_LABELS")
-    labelled = labels.attach(pages, pathlib.Path(labels_dir.replace("{slug}", slug)).expanduser()) if labels_dir else 0
-    roles_dir = "none" if labelled else str(roles_dir or os.environ.get("PARISAOCR_ROLES") or roles.BUNDLED)
+    ldir = pathlib.Path(labels_dir.replace("{slug}", slug)).expanduser() if labels_dir else None
+    have = labels.covered(pages, ldir) if ldir else set()  # a person's corrections leave the rest to decide
+    all_labelled = bool(have) and all(p.index in have for p in pages if p.lines)
+    roles_dir = str(roles_dir or os.environ.get("PARISAOCR_ROLES") or roles.BUNDLED)
     used = None
-    if roles_dir != "none":
+    if roles_dir != "none" and (not all_labelled or confidence):
+        # the models first: they decide the pages without labels; labels then take over the pages they cover
         model_dir = pathlib.Path(roles_dir.replace("{slug}", slug)).expanduser()
-        roles.annotate(pages, lambda p: p.image, model_dir)
-        used = roles.describe(model_dir)
-        hints = os.environ.get("PARISAOCR_HEAD_HINTS")  # experimental: another labeller's headings as the evidence
-        if hints:
-            used += "; " + head_hints(pages, pathlib.Path(hints.replace("{slug}", slug)).expanduser())
+        roles.annotate(pages, lambda p: p.image, model_dir, decide=not all_labelled)
+        if not all_labelled:
+            used = roles.describe(model_dir)
+            hints = os.environ.get("PARISAOCR_HEAD_HINTS")  # experimental: another labeller's headings as the evidence
+            if hints:
+                used += "; " + head_hints(pages, pathlib.Path(hints.replace("{slug}", slug)).expanduser())
+    labelled = labels.attach(pages, ldir, reviewed) if (have or reviewed) else 0
     if labelled:
-        used = f"page labels ({labelled} of {len(pages)} pages)"
+        others = f"; line-role models elsewhere ({used})" if used and not all_labelled else ""
+        used = f"page labels ({labelled} of {len(pages)} pages){others}"
     if report is not None:
         report.update(stamps=found, roles=used)
     # quartiles rather than medians: in a short book chapter openings (starting low) can be half the pages
@@ -509,6 +519,7 @@ def analyze_all(pages, roles_dir=None, report=None, labels_dir=None):
     layouts = [analyze(p, header_like, top_zone, foot_zone) for p in pages]
     for L in layouts:
         labels.relayout(L, metrics)
+        labels.relayout_human(L, metrics)
     tops = [L.top for L in layouts if L.kind == "text" and len(L.body) >= 8]
     book_top = float(np.percentile(tops, 25)) if tops else 0.08
     for L in layouts:

@@ -182,7 +182,7 @@ html[dir=rtl] .jobhead h1[dir=auto], html[dir=rtl] .bookcard h2[dir=auto] { text
 .reader { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .readerbar { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
 .reader iframe, .reviewframe { flex: 1; width: 100%; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; }
-.reviewframe { height: 80vh; }
+.reviewframe { height: calc(100vh - 110px); min-height: 620px; }
 .reviewbar { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
 .reviewbar .muted { flex: 1; font-size: 13px; }
 .report { direction: ltr; text-align: left; font-family: system-ui, sans-serif; font-size: 14px; }

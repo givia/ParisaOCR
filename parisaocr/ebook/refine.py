@@ -27,7 +27,9 @@ def join_fractions(L):
             overlap = min(a.x1, b.x1) - max(a.x0, b.x0)
             if b.y0 > a.yc and b.y0 - a.y1 < 0.5 * L.lh and overlap > 0.4 * min(a.w, b.w):
                 box = (min(a.x0, b.x0), a.y0, max(a.x1, b.x1), b.y1)
-                L.body = [l for l in L.body if l is not a and l is not b] + [_fraction(a.text, b.text, box, min(a.conf, b.conf))]
+                frac = _fraction(a.text, b.text, box, min(a.conf, b.conf))
+                frac.parts = [a, b]  # its OCR lines (the review panel shows them with the fraction's role)
+                L.body = [l for l in L.body if l is not a and l is not b] + [frac]
                 found += 1
                 break
     # a denominator whose numerator the recognizer joined to the words beside it ("۱‌آن را در بر")

@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ParisaOCR review</title>
+<link rel="stylesheet" href="/static/panel.css">
+</head>
+<body>
+<header class="top">
+  <h1 id="book"></h1>
+  <span class="counts" id="counts"></span>
+  <span class="spacer"></span>
+  <span class="status" id="status"></span>
+  <button class="btn" id="undo" type="button"></button>
+  <button class="btn primary" id="rebuild" type="button"></button>
+  <button class="btn" id="done" type="button"></button>
+  <button class="btn ghost small" id="lang" type="button"></button>
+</header>
+<main class="work" id="work">
+  <aside class="side">
+    <nav class="tabs" id="tabs">
+      <button type="button" data-tab="issues"></button>
+      <button type="button" data-tab="pages"></button>
+      <button type="button" data-tab="book"></button>
+    </nav>
+    <div class="tabbody" id="tabbody"></div>
+  </aside>
+  <section class="page">
+    <div class="ptool" id="ptool"></div>
+    <div class="stagewrap" id="stagewrap"><div class="stage" id="stage"></div></div>
+    <details class="preview" id="preview"><summary id="previewsum"></summary><iframe id="pv" title="EPUB"></iframe></details>
+  </section>
+  <aside class="insp" id="insp"></aside>
+</main>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="/static/panel.js"></script>
+</body>
+</html>

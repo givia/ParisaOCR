@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.7.0 (2026-10-06)
+
+- **Review panel: fix anything in a converted book.** `parisaocr epub --review`
+  and the app's "Review and fix" tab now open a full review panel in place of
+  the chapter marker. It shows every page with each OCR line's role as the
+  converter decided it (body, heading, footnote, running head, quote, verse,
+  caption …), a heading's level, paragraph starts and note numbers, and how
+  sure the converter is. Any of it can be changed: roles (one key for a line or
+  a dragged group), levels, paragraph starts, note numbers (splitting and
+  merging notes), where a note's marker stands (click the word it follows), a
+  misread line's text, a line the OCR missed (of any role) or read as one with
+  the next (split it at the cursor), a contents page's entries, the page's type
+  and printed number, figure pages (crop, rotation), the pictures on a page
+  (draw or remove), tables as images or HTML, the parts and chapters, the
+  book's details and cover. "Footnotes start here" fixes a page's footnote area
+  in one click, and a running head can be dropped from every page at once.
+- A correction changes only what was corrected. A page someone changed is
+  still converted as before (by the rules, or by a language model's labels),
+  with their changes on top; everything else on the page comes out exactly as
+  it did. "Page is right" marks a page as checked and changes nothing. (Checked
+  on the 23 books we score: setting every line's paragraph start to the value
+  it already had leaves all 32,393 blocks unchanged.)
+- **No more pages lost to page numbers.** Two pages that end up with the same
+  printed number used to be taken for two scans of one page, and one was
+  dropped: in the 23 books we score and one more, 45 pages were dropped this
+  way, and only 7 of them had really been scanned twice. Now a page is dropped only if it reads like the
+  page it collides with. Any other page stays in the book, after the page
+  before it in the PDF, without a printed number of its own. This covers a
+  misread number, front matter numbered with letters, and a second run of
+  numbers. The number goes to the page whose number was read rather than
+  inferred, else to the one its neighbours back. In the scored books, 3 more
+  chapters are found and no book got worse in any setup. The report lists the
+  pages kept without a number. On the review panel, a page still left out
+  comes first among the issues, and "Keep this page in the book" puts it back.
+- A note marker placed by hand is followed exactly: the note links after the
+  chosen word even where the OCR glued its number to another word, and digits
+  the person left on a line are not taken for markers. Markers placed by hand
+  also link in English lines and in the halves of a verse line.
+- A part's opening page keeps what it prints under the part's title (a
+  section's title, the text), whether a person marked it or a language
+  model's labels opened the part; that text used to be dropped.
+- The open issues come first, least sure first: notes without a marker,
+  contents entries no heading matches, chapters the contents do not list, gaps
+  in note numbers, lines the models doubt, lines the OCR read uncertainly. The
+  confidence is shown as sure / check / unsure, from measured sources: the
+  footnote and heading models (AUROC 0.995 and 0.98 against Gemini's labels on
+  books they never trained on), the role model (0.90, too sure below 0.99), and
+  the OCR's weakest word (0.74 on 750 hand-checked lines).
+- Corrections are saved as they are made in `OUT/NAME.review.json`, can be
+  undone, are found again after a new OCR (by their lines' boxes), and are used
+  by every later conversion. Rebuilding takes seconds. Persian and English.
+- When only some pages have a language model's labels, the line-role models
+  now decide the others (they used to be switched off for the whole book).
+- Fixed: on the pages before the first chapter, the marks the footnote-marker
+  search found in the image were left in the text as private-use characters.
+
 ## 0.6.0 (2026-10-05)
 
 - **`parisaocr app`: the whole process in the browser.** A local page

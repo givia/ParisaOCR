@@ -159,6 +159,18 @@ def notenum_current(ocr_dir):
         return False
 
 
+def rows(ocr_dir, index):
+    """The OCR rows of PDF page INDEX as read: {row: {"text", "bbox", "conf", "words"}}, empty rows left out."""
+    jl = pathlib.Path(ocr_dir) / "jsonl" / f"p-{index:03d}.jsonl"
+    out = {}
+    if jl.exists():
+        for k, row in enumerate(map(json.loads, (r for r in jl.read_text(encoding="utf-8").splitlines() if r.strip()))):
+            if row["text"].strip():
+                out[k] = {"text": row["text"].strip(), "bbox": list(row["bbox"]), "conf": row["conf"],
+                          "words": [{"text": w["text"], "bbox": list(w["bbox"]), "conf": w["conf"]} for w in row["words"]]}
+    return out
+
+
 def load(ocr_dir, note_numbers=True):
     ocr_dir = pathlib.Path(ocr_dir)
     pages = []
