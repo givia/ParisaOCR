@@ -58,7 +58,7 @@ def build(pages, layouts, ordered, book, extra):
     for ch in book.chapters:
         paras = sum(b.kind in ("p", "quote", "bib") for b in ch.blocks)
         title = ch.title or {"front": "(front matter)", "part": "(part)"}.get(ch.kind, "")
-        out.append(f"| {ch.page} | {title} | {paras} | {len(ch.notes)} |")
+        out.append(f"| {ch.page if isinstance(ch.page, int) else '–'} | {title} | {paras} | {len(ch.notes)} |")
     out.append("")
     if r["toc_unmatched"]:
         out += ["Contents entries not found as a heading:", ""]

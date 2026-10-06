@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.1 (2026-10-06)
+
+- Fixed: a book could stop converting with `ValueError: invalid literal for
+  int()` when a page kept without a printed number (new in 0.7.0) fell where a
+  page number is missing. Such a page gets no page mark, as intended, and the
+  numbers it may stand for are no longer reported as missing pages. In the
+  report's table of chapters, a chapter that opens on such a page shows "–".
+
 ## 0.7.0 (2026-10-06)
 
 - **Review panel: fix anything in a converted book.** `parisaocr epub --review`

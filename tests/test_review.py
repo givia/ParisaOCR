@@ -240,6 +240,14 @@ def test_pages_with_one_number():
     o = ordered(nums, texts)
     keys = {p.page.index: n for p, n in o.pages}
     assert o.duplicates == [] and len(o.pages) == 12 and 4 in (keys[4], keys[5]) and keys[4] < keys[5]  # in PDF order
+    # a second run numbered 5 to 9 (PDF 11 to 15) after pages 1 to 10, then page 16: kept after page 10, under float
+    # keys (the first 13.0: not page 13, no page mark), and the numbers they sit in for are not reported missing
+    nums = list(range(1, 11)) + [5, 6, 7, 8, 9] + [16, 17, 18]
+    o = ordered(nums, [words(i) for i in range(len(nums))])
+    keys = {p.page.index: n for p, n in o.pages}
+    assert [p.page.index for p, _ in o.pages] == list(range(1, 19)) and o.duplicates == []
+    assert keys[11] == 13.0 and all(isinstance(keys[i], float) for i in range(11, 16))
+    assert all(isinstance(keys[i], int) for i in list(range(1, 11)) + [16, 17, 18]) and o.missing == []
 
 
 def test_lines_found_again_after_a_new_ocr(book):

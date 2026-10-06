@@ -83,7 +83,7 @@ def collect(layouts, book, ordered):
             kind = {"part": "part", "front": "other"}.get(opens[n], "opening")
         else:
             kind = "text"
-        printed = n if n is not None and float(n).is_integer() else None  # a page kept by hand has no number
+        printed = n if isinstance(n, int) else None  # a page kept without a number has a float key (`order`)
         out[p.index] = {"n": printed, "kind": L.kind, "type": kind, "lines": lines, "missing": missing,
                         "toc": list(getattr(p, "label_toc", []) or [])}
     return out

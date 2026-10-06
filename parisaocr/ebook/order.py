@@ -188,5 +188,7 @@ def order(layouts):
             out.append((d, key))
         out.sort(key=lambda x: x[1])
     nums_sorted = sorted(by_num)
-    missing = [(a + 1, b - 1) for a, b in zip(nums_sorted, nums_sorted[1:]) if b - a > 1]
+    loose = [n for l, n in out if not isinstance(n, int)]  # keys of the pages kept without a number: a gap one of them
+    missing = [(a + 1, b - 1) for a, b in zip(nums_sorted, nums_sorted[1:])  # sits in may not be missing at all
+               if b - a > 1 and not any(a < k < b for k in loose)]
     return Ordered(out, runs, dups, missing, inferred=inferred, apart=apart)

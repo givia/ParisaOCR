@@ -1062,7 +1062,7 @@ class Assembler:
             part = n in starts and starts[n]["kind"] == "part"
             if part:
                 self.new_chapter(starts[n]["title"], n, kind="part")
-                if n >= 1 and float(n).is_integer():  # as for text pages below: a page before the first printed
+                if isinstance(n, int) and n >= 1:  # as for text pages below: a page before the first printed
                     self.add(Block("mark", [PageMark(n)]))  # number has none to mark, nor a page kept without one
                 if not (starts[n].get("after_h2") or starts[n].get("bylines") or starts[n].get("rest")):
                     continue  # the part's title page; one that prints more (a person's reading) goes on below
@@ -1093,7 +1093,8 @@ class Assembler:
             elif self.chapter is None:
                 self.new_chapter("", n, kind="front")
             self.chapter.notes += notes
-            if self.chapter.kind != "front" and n >= 1 and float(n).is_integer() and not part:
+            # a page kept without a number (`order`: its key is a float, even a whole one) has none to mark
+            if self.chapter.kind != "front" and isinstance(n, int) and n >= 1 and not part:
                 mark = PageMark(n)
                 if self.para is not None and self.para.kind == "poem":
                     self.para.rows.append([mark])
