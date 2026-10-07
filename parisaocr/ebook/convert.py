@@ -73,6 +73,11 @@ def convert(opts, read, marks=None):
         except Exception as e:  # noqa: BLE001  a help, not a step the book needs: it is converted without them
             print(f"parisaocr: note numbers not re-read ({type(e).__name__}: {str(e)[:200]}); converting without them",
                   flush=True)
+    if opts.model == "default" or opts.model.startswith("kraken:"):  # footnote markers read on their own: the same model
+        from . import markernum
+        from ..cli import BUNDLED_MODEL
+        markernum.configure(BUNDLED_MODEL if opts.model == "default" else opts.model[7:],
+                            "cpu" if getattr(opts, "cpu", False) else None)
     print("parisaocr: page layout", flush=True)
     progress.emit("layout")
     ps = source.load(ocr_dir)
@@ -122,6 +127,10 @@ def convert(opts, read, marks=None):
     progress.emit("epub")
     path = epub.write(book, out / f"{name}.epub", meta, tables=opts.tables)
     print(f"parisaocr: EPUB -> {path}", flush=True)
+    preview = None
+    if getattr(opts, "confidence", False):  # the review panel: its copy marks where each PDF page begins
+        (work / "review").mkdir(parents=True, exist_ok=True)
+        preview = epub.write(book, work / "review" / "preview.epub", meta, tables=opts.tables, anchors=True)
     check = epubcheck(path)
     text = report.build(ps, layouts, ordered, book, dict(
         title=meta["title"], pdf=pdf, epub=path, size=path.stat().st_size, epubcheck=check,
@@ -134,4 +143,4 @@ def convert(opts, read, marks=None):
     summary = "\n".join(l.lstrip("- ") for l in text.splitlines() if l.startswith(("- Structure", "- ")) and ("chapters," in l or "Structure" in l))
     return dict(epub=path, report=out / f"{name}.report.md", summary=summary, title=meta["title"], book=book,
                 ordered=ordered, layouts=layouts, marks_path=marks_path, work=work, pages=ps, ocr_dir=ocr_dir,
-                corrections_path=corr_path, meta=meta)
+                corrections_path=corr_path, meta=meta, preview_epub=preview)

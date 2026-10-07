@@ -9,7 +9,9 @@ entries, the page's printed number; and for the book: where its parts, chapters 
 marker, contents entries no heading matches, lines the models doubt, lines the OCR read uncertainly.
 
 Corrections go to OUT/NAME.review.json (`corrections`) and the marks to OUT/NAME.marks.json; every later conversion
-of the book uses them. Rebuilding takes seconds: the OCR is kept.
+of the book uses them. Rebuilding takes seconds: the OCR is kept, and so is what the page images and the
+line-role models gave (`imagecache`). The preview shows the page in a copy of the EPUB that marks where each PDF
+page begins; with the preview open, the panel rebuilds by itself once edits pause.
 
 The server binds 127.0.0.1 only: the page images never leave the machine. It answers only requests that name it as
 their host (a page whose own domain is made to resolve to 127.0.0.1 is refused).
@@ -52,6 +54,8 @@ class Panel:
         self.lock = threading.RLock()
         self.done = threading.Event()
         self.building = False
+        self.changes = 0  # counts the changes, so that one made while a rebuild runs still shows as not built
+        self._rows = {}  # the OCR rows of each page as read: the same for every rebuild
         self.load(res)
 
     # --- the converted book ------------------------------------------------------------------------------------------
@@ -65,13 +69,16 @@ class Panel:
             self.n_of = {L.page.index: n for L, n in self.ordered.pages}
             self.pdf_of = {n: pdf for pdf, n in self.n_of.items()}
             self.dec = decisions.collect(res["layouts"], self.book, self.ordered)
+            units = [ch.page for ch in self.book.chapters if ch.kind != "front" and ch.page is not None]
+            self.first_unit = min(units) if units else None  # the pages before it are front matter
             self.corr = corrections.load(res["corrections_path"])
             self.marks_path = res["marks_path"]
             self.built = time.time()
             self.build_seconds = seconds
             self.dirty = False
-            self._rows, self._infos, self._issues = {}, {}, None
+            self._infos, self._issues = {}, None
             self.hrefs = self._page_hrefs()
+            self.anchors = self._pdf_anchors()
 
     def _page_hrefs(self):
         """{printed page: href in the EPUB} from its page-list."""
@@ -84,6 +91,25 @@ class Panel:
         block = re.search(r'<nav epub:type="page-list".*?</nav>', nav, re.S)
         for href, n in re.findall(r'href="([^"]+#page-(\d+))"', block.group(0) if block else ""):
             out[int(n)] = "OEBPS/" + href
+        return out
+
+    def preview_epub(self):
+        """The EPUB the preview shows: the panel's copy with an anchor per PDF page, else the book's."""
+        p = self.res.get("preview_epub")
+        return p if p and pathlib.Path(p).exists() else self.res["epub"]
+
+    def _pdf_anchors(self):
+        """{PDF page: (file in the EPUB, whether its anchor is the file's first)}: where each page's content begins."""
+        out = {}
+        try:
+            with zipfile.ZipFile(self.preview_epub()) as z:
+                for name in z.namelist():
+                    if name.startswith("OEBPS/text/") and name.endswith(".xhtml"):
+                        found = re.findall(r'id="pdf-(\d+)"', z.read(name).decode("utf-8"))
+                        for k, pdf in enumerate(found):
+                            out.setdefault(int(pdf), (name, k == 0))
+        except (OSError, KeyError, zipfile.BadZipFile):
+            pass
         return out
 
     def rows(self, pdf):
@@ -120,13 +146,15 @@ class Panel:
                     cur.pop(k, None)
             l = line_of.get(r)
             model = getattr(l, "model", None) if l is not None else None
-            rd = 0.0 if "r" in h else issues_mod.role_doubt(model, cur["r"])
+            labelled = getattr(p, "labelled", False)  # a language model's labels decided the page
+            rd = 0.0 if "r" in h else issues_mod.role_doubt(model, cur["r"], labelled)
+            why = None if "r" in h or labelled else issues_mod.disagreement(model, cur["r"])
             td, weak = issues_mod.text_doubt(row["words"], row["conf"])
             if "x" in h:
                 td = 0.0
             lines.append({"row": r, "bbox": row["bbox"], "text": row["text"], "x": (it or {}).get("x"),
                           "conf": row["conf"], "weak": weak, "words": row["words"], "d": cur, "h": h,
-                          "model": model, "doubt": {"role": rd, "text": td}})
+                          "model": model, "doubt": {"role": rd, "text": td}, "why": why})
         page = {"type": d["type"], **({"pn": str(d["n"])} if d.get("n") else {})}
         ph = list((corr or {}).get("h") or [])
         for k in ph:  # what the person set for the page
@@ -137,11 +165,14 @@ class Panel:
                 "reviewed": corr is not None, "quality": getattr(L, "quality", None), "lines": lines,
                 "regions": [{"kind": r.kind, "bbox": [int(v) for v in r.bbox]} for r in L.regions],
                 "crop": [int(v) for v in L.crop] if getattr(L, "crop", None) else None, "rotate": getattr(L, "rotate", 0),
+                "front": self.first_unit is not None and self.n_of.get(pdf) is not None
+                         and self.n_of[pdf] < self.first_unit,  # before the first chapter: its footnotes are not read
                 "left": None if pdf in self.n_of else dict(zip(("kept", "number"), next(
                     ((k, n) for x, k, n in self.ordered.duplicates if x == pdf), (None, None)))),
                 "missing": (corr if "missing" in ph else d).get("missing") or [],
                 "toc": (corr if "toc" in ph else d).get("toc") or [],
-                "href": self.href_of(pdf)}
+                "href": self.href_of(pdf),
+                "top": pdf in self.anchors and self.anchors[pdf][1]}  # its content begins the file (a chapter's title)
 
     def page_infos(self):
         """Every page's info, kept until a change touches the page."""
@@ -151,6 +182,11 @@ class Panel:
         return {pdf: self._infos[pdf] for pdf in sorted(self.pages)}
 
     def href_of(self, pdf):
+        """Where the preview shows PDF page PDF: its anchor in the panel's copy of the EPUB. A page without one has
+        no text of its own in the EPUB (a contents page, a blank page, a page left out): None. Without the copy
+        (a result made without the panel), its printed page's pagebreak, or the nearest before it."""
+        if self.anchors:
+            return f"{self.anchors[pdf][0]}#pdf-{pdf}" if pdf in self.anchors else None
         n = self.n_of.get(pdf)
         if n is None or not self.hrefs:
             return None
@@ -216,6 +252,7 @@ class Panel:
         """Save the corrections; the pages PDFS (all when None) are shown anew."""
         corrections.save(self.res["corrections_path"], self.corr)
         self.dirty = True
+        self.changes += 1
         if pdfs is None:
             self._infos = {}
         else:
@@ -294,6 +331,7 @@ class Panel:
         with self.lock:
             marks_mod.save(self.marks_path, pages, self.book.report.get("starts", {}))
             self.dirty = True
+            self.changes += 1
 
     def rebuild(self):
         with self.lock:
@@ -301,9 +339,11 @@ class Panel:
                 raise RuntimeError("a rebuild is running")
             self.building = True
         t0 = time.time()
+        started = self.changes
         try:
             res = self.rebuild_fn(marks_mod.load(self.marks_path))
             self.load(res, round(time.time() - t0, 1))
+            self.dirty = self.changes != started  # a change made while it ran is not in it
         finally:
             self.building = False
         return {"epub": str(self.res["epub"]), "summary": self.res.get("summary", ""), "seconds": self.build_seconds}
@@ -388,7 +428,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if path.startswith("/epub/"):
                 inner = posixpath.normpath(urllib.parse.unquote(path[len("/epub/"):]))
                 try:
-                    with zipfile.ZipFile(r.res["epub"]) as z:
+                    with zipfile.ZipFile(r.preview_epub()) as z:
                         data = z.read(inner)
                 except (KeyError, OSError, zipfile.BadZipFile):
                     return self._send(b"not found", "text/plain", 404)

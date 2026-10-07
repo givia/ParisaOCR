@@ -30,6 +30,10 @@ const T = {
     r_contents: "فهرست", r_header: "سرصفحه", r_pagenum: "شمارهٔ صفحه", r_noise: "زائد", r_other: "دیگر",
     k_role: "نقش نامطمئن", k_text: "متن نامطمئن", k_note: "پانویس بی‌نشانه", k_marker: "نشانهٔ بی‌پانویس", k_numbering: "شمارهٔ جاافتاده",
     k_contents: "مدخل فهرست پیدا نشد", k_chapter: "فصل خارج از فهرست", k_page: "صفحهٔ کم‌کیفیت", k_left: "صفحهٔ بیرون از کتاب",
+    why_note_yes: "مدل پانویس: پانویس است ({p})", why_note_no: "مدل پانویس: پانویس نیست ({p})",
+    why_heading_yes: "مدل عنوان: عنوان است ({p})", why_heading_no: "مدل عنوان: عنوان نیست ({p})",
+    front_notes: "این صفحه پیش از نخستین فصل کتاب است و پانویس‌های چنین صفحه‌ای خوانده و پیوند داده نمی‌شوند. اگر این‌جا بخشی از کتاب است (مثلاً مقدمه)، در زبانهٔ «کتاب» صفحه‌ای را که آن بخش از آن آغاز می‌شود «فصل» کنید.",
+    to_book: "رفتن به زبانهٔ «کتاب»",
     left_hint: "این صفحه در کتاب نیست: مبدل آن را نسخهٔ دوم صفحهٔ {n} (PDF {kept}) دانست. اگر چنین نیست، شمارهٔ چاپی‌اش را درست کنید یا آن را در کتاب نگه دارید.",
     left_hint0: "این صفحه در کتاب نیست. اگر باید باشد، شمارهٔ چاپی‌اش را درست کنید یا آن را در کتاب نگه دارید.",
     keep: "این صفحه در کتاب بماند", kept: "در کتاب می‌ماند (بی‌شماره، پس از صفحهٔ پیشینش در PDF)", unkeep: "برگرداندن", all: "همه", show_ignored: "نادیده‌گرفته‌ها",
@@ -39,7 +43,7 @@ const T = {
     pt_dedication: "تقدیم", pt_epigraph: "سرلوحه", pt_endnotes: "یادداشت‌های پایانی", pt_bibliography: "کتاب‌نامه", pt_index: "نمایه",
     pt_figure: "تصویر", pt_table: "جدول", pt_ad: "آگهی", pt_blank: "سفید", pt_other: "دیگر",
     page_type: "نوع صفحه", printed: "شمارهٔ چاپی", tool_select: "انتخاب", tool_cut: "پانویس‌ها از این‌جا", accept: "صفحه درست است",
-    revert: "بازگرداندن صفحه", reviewed: "بازبینی‌شده", prev: "قبلی", next: "بعدی", preview: "این صفحه در EPUB (پس از بازسازی)",
+    revert: "بازگرداندن صفحه", reviewed: "بازبینی‌شده", prev: "قبلی", next: "بعدی", preview: "این صفحه در EPUB", preview_building: "در حال به‌روز شدن…", preview_old: "تغییرهای تازه هنوز در آن نیست", pv_none: "این صفحه در متن EPUB نیامده است: صفحهٔ فهرست، صفحهٔ سفید، یا صفحه‌ای که کنار گذاشته شده.",
     cut_hint: "روی تصویر جایی را بزنید که پانویس‌ها از آن‌جا شروع می‌شوند.", lines: "سطرهای صفحه", select_line: "سطری را انتخاب کنید (روی تصویر یا در فهرست سطرها).",
     n_sel: "{n} سطر انتخاب شده", role: "نقش", level: "سطح عنوان", lv1: "۱ فصل/بخش", lv2: "۲ زیربخش", lv3: "۳", note_no: "شمارهٔ پانویس",
     note_hint: "۰ یعنی ادامهٔ پانویس قبلی", para: "آغاز بند (پاراگراف)", text: "متن سطر", text_hint: "اصلاح متن؛ خالی یعنی همان متن اوسی‌آر",
@@ -62,7 +66,7 @@ const T = {
     error: "خطا", contents_hint: "مدخل‌های این صفحهٔ فهرست؛ اگر خالی بماند، قاعده‌ها آن را می‌خوانند.",
     rotate: "چرخش", crop: "برش تصویر", crop_hint: "دور بخشی از صفحه را که تصویر است بکشید.", crop_reset: "کل صفحه",
     pictures: "تصویرهای این صفحه", draw_picture: "کشیدن تصویر", picture_hint: "دور تصویری را که پیدا نشده بکشید.",
-    picture_n: "تصویر {n}", no_pictures: "تصویری ندارد.", tables: "جدول‌ها", tables_default: "پیش‌فرض کتاب",
+    picture_n: "تصویر {n}", picture_redraw: "برای جابه‌جا کردن یا تغییر اندازه، آن را حذف کنید و دوباره بکشید.", crop_title: "تصویر این صفحه", crop_again: "برش دوباره", no_pictures: "تصویری ندارد.", tables: "جدول‌ها", tables_default: "پیش‌فرض کتاب",
     tables_image: "به‌صورت تصویر", tables_html: "جدول HTML", table_n: "جدول {n}",
   },
   en: {
@@ -75,6 +79,10 @@ const T = {
     r_contents: "Contents", r_header: "Running head", r_pagenum: "Page number", r_noise: "Noise", r_other: "Other",
     k_role: "Unsure role", k_text: "Unsure text", k_note: "Note without marker", k_marker: "Marker without note", k_numbering: "Gap in note numbers",
     k_contents: "Contents entry not found", k_chapter: "Chapter not in contents", k_page: "Poorly read page", k_left: "Page left out of the book",
+    why_note_yes: "Footnote model: a footnote ({p})", why_note_no: "Footnote model: not a footnote ({p})",
+    why_heading_yes: "Heading model: a heading ({p})", why_heading_no: "Heading model: not a heading ({p})",
+    front_notes: "This page comes before the book's first chapter, and the footnotes of such pages are not read or linked. If it is part of the book (an introduction, say), in the Book tab mark the page where that part begins as a chapter.",
+    to_book: "Go to the Book tab",
     left_hint: "This page is not in the book: the converter took it for a second scan of page {n} (PDF {kept}). If it is not, correct its printed number or keep it in the book.",
     left_hint0: "This page is not in the book. If it should be, correct its printed number or keep it in the book.",
     keep: "Keep this page in the book", kept: "Kept in the book (no number, after the page before it in the PDF)", unkeep: "Undo", all: "All", show_ignored: "Ignored",
@@ -84,7 +92,7 @@ const T = {
     pt_dedication: "Dedication", pt_epigraph: "Epigraph", pt_endnotes: "Endnotes", pt_bibliography: "Bibliography", pt_index: "Index",
     pt_figure: "Figure", pt_table: "Table", pt_ad: "Advert", pt_blank: "Blank", pt_other: "Other",
     page_type: "Page type", printed: "Printed no.", tool_select: "Select", tool_cut: "Footnotes start here", accept: "Page is right",
-    revert: "Revert page", reviewed: "Reviewed", prev: "Previous", next: "Next", preview: "This page in the EPUB (after a rebuild)",
+    revert: "Revert page", reviewed: "Reviewed", prev: "Previous", next: "Next", preview: "This page in the EPUB", preview_building: "updating…", preview_old: "the latest changes are not in it yet", pv_none: "This page has no text of its own in the EPUB: a contents page, a blank page, or a page left out.",
     cut_hint: "Click the image where the footnotes begin.", lines: "Lines of the page", select_line: "Select a line (on the image or in the list of lines).",
     n_sel: "{n} lines selected", role: "Role", level: "Heading level", lv1: "1 chapter/part", lv2: "2 section", lv3: "3", note_no: "Note number",
     note_hint: "0 continues the note before", para: "Starts a paragraph", text: "Line text", text_hint: "Correct the text; empty means the OCR's text",
@@ -107,7 +115,7 @@ const T = {
     error: "Error", contents_hint: "The entries of this contents page; leave empty to let the rules read it.",
     rotate: "Rotate", crop: "Crop picture", crop_hint: "Drag around the part of the page that is the picture.", crop_reset: "Whole page",
     pictures: "Pictures on this page", draw_picture: "Draw a picture", picture_hint: "Drag around a picture that was not found.",
-    picture_n: "Picture {n}", no_pictures: "No pictures.", tables: "Tables", tables_default: "Book default",
+    picture_n: "Picture {n}", picture_redraw: "To move or resize it, remove it and draw it again.", crop_title: "This page's picture", crop_again: "Crop again", no_pictures: "No pictures.", tables: "Tables", tables_default: "Book default",
     tables_image: "As images", tables_html: "HTML tables", table_n: "Table {n}",
   },
 };
@@ -115,7 +123,7 @@ const T = {
 let LANG = "fa";
 try { LANG = localStorage.getItem("parisaocr.lang") || localStorage.getItem("parisaocr.review.lang") || "fa"; } catch (e) { /* storage blocked */ }
 const S = {book: null, issues: [], page: null, pdf: null, sel: [], tab: "issues", filter: "all", showIgnored: false,
-           sortPages: "doubt", tool: "select", band: null, busy: false};
+           sortPages: "doubt", tool: "select", band: null, busy: false, pic: null};
 
 function t(key, vars) {
   let s = T[LANG][key] ?? T.en[key] ?? key;
@@ -148,6 +156,7 @@ async function loadBook() {
   [S.book, S.issues] = await Promise.all([api("/api/book"), api("/api/issues")]);
   renderTop();
   renderSide();
+  previewLater();
 }
 
 async function openPage(pdf, rows) {
@@ -155,6 +164,7 @@ async function openPage(pdf, rows) {
   S.page = page;
   S.pdf = pdf;
   S.sel = rows || [];
+  S.pic = null;
   S.tool = "select";
   try { localStorage.setItem("parisaocr.review.page:" + S.book.epub, String(pdf)); } catch (e) { /* ignore */ }
   renderPage();
@@ -187,6 +197,7 @@ function renderTop() {
   $("#undo").disabled = !b.history;
   $("#rebuild").textContent = t("rebuild");
   $("#rebuild").disabled = S.busy;
+  previewLabel();
   $("#done").textContent = t("done");
   $("#lang").textContent = t("lang");
   $$("#tabs button").forEach(x => { x.textContent = t("tab_" + x.dataset.tab); x.classList.toggle("on", x.dataset.tab === S.tab); });
@@ -215,7 +226,9 @@ async function undo() {
   } catch (e) { toast(e.message, true); }
 }
 
-async function rebuild() {
+// QUIET: started by the preview (`previewLater`): no message, and the page is not drawn again under a person who is
+// typing or using a tool; only the preview's link and notes are taken from the new build.
+async function rebuild(quiet) {
   if (S.busy) return;
   S.busy = true;
   renderTop();
@@ -223,8 +236,13 @@ async function rebuild() {
     const r = await api("/api/rebuild", {});
     S.busy = false;
     await loadBook();
-    if (S.pdf != null) await openPage(S.pdf, S.sel);
-    toast(t("built", {s: num(r.seconds)}));
+    const typing = ["INPUT", "TEXTAREA", "SELECT"].includes((document.activeElement || {}).tagName);
+    if (S.pdf != null && !(quiet && (typing || S.tool !== "select"))) await openPage(S.pdf, S.sel);
+    else if (S.pdf != null) {
+      const p = await api(`/api/page/${S.pdf}`);
+      Object.assign(S.page, {href: p.href, top: p.top, notes: p.notes});
+    }
+    if (!quiet) toast(t("built", {s: num(r.seconds)}));
     reloadPreview(true);
   } catch (e) {
     S.busy = false;
@@ -243,9 +261,18 @@ function renderSide() {
   return renderBookTab(el);
 }
 
+function whyText(why) {
+  // a sure model that reads the line otherwise: [what, its probability, doubt]
+  if (!why) return "";
+  const [what, p] = why;
+  const fmt = (Math.round(p * 100) / 100).toLocaleString(LANG === "fa" ? "fa-IR" : "en-US");
+  return t(`why_${what}_${p >= 0.5 ? "yes" : "no"}`, {p: fmt});
+}
+
 function issueLine(x) {
   const what = x.kind === "numbering" ? (x.detail.missing || []).map(num).join("، ")
     : x.kind === "note" ? `${num(x.detail.num)}: ${x.text}`
+    : x.kind === "role" && x.detail.why ? `${whyText(x.detail.why)} · ${x.text}`
     : x.kind === "left" && x.detail.kept != null ? `${t("book_page", {n: num(x.detail.number)})} = ${t("pdf_page", {pdf: num(x.detail.kept)})}`
     : x.text || "";
   return what;
@@ -403,7 +430,7 @@ function renderPage() {
   if (rv) rv.onclick = async () => { try { const r = await api(`/api/page/${p.pdf}/revert`, {}); keepExtras(r.page); refreshLater(); } catch (e) { toast(e.message, true); } };
   renderStage();
   renderInsp();
-  $("#previewsum").textContent = t("preview");
+  previewLabel();
   reloadPreview(false);
 }
 
@@ -430,10 +457,14 @@ function renderStage() {
     const c = roleColor(l.d.r);
     return `<rect class="ln ${level(d)} ${S.sel.includes(l.row) ? "sel" : ""}" data-row="${l.row}" x="${x0}" y="${y0}" width="${x1 - x0}" height="${y1 - y0}" fill="${c}" stroke="${c}"><title>${esc(roleName(l.d.r))}: ${esc(l.x || l.text)}</title></rect>`;
   }).join("");
-  const regions = (p.regions || []).map(r => `<rect x="${r.bbox[0]}" y="${r.bbox[1]}" width="${r.bbox[2] - r.bbox[0]}" height="${r.bbox[3] - r.bbox[1]}"
+  const tables = (p.regions || []).filter(r => r.kind === "table").map(r => `<rect x="${r.bbox[0]}" y="${r.bbox[1]}" width="${r.bbox[2] - r.bbox[0]}" height="${r.bbox[3] - r.bbox[1]}"
       fill="none" stroke="${roleColor(r.kind)}" stroke-width="4" stroke-dasharray="14 8" style="vector-effect:non-scaling-stroke;pointer-events:none"/>`).join("");
-  const crop = isFigure(p) && (p.page.crop || p.crop) ? (([x0, y0, x1, y1]) => `<rect x="${x0}" y="${y0}" width="${x1 - x0}" height="${y1 - y0}" fill="none"
-      stroke="${css("--accent")}" stroke-width="4" style="vector-effect:non-scaling-stroke;pointer-events:none"/>`)(p.page.crop || p.crop) : "";
+  // pictures can be selected (a click inside one that is not on a line): the panel then offers what to do with it
+  const pics = isFigure(p) ? "" : pictureBoxes(p).map(([x0, y0, x1, y1], i) => `<rect class="pic ${S.pic === i ? "sel" : ""}" data-pic="${i}"
+      x="${x0}" y="${y0}" width="${x1 - x0}" height="${y1 - y0}" stroke="${roleColor("figure")}"><title>${esc(t("picture_n", {n: num(i + 1)}))}</title></rect>`).join("");
+  const crop = isFigure(p) && (p.page.crop || p.crop) ? (([x0, y0, x1, y1]) => `<rect class="pic crop ${S.pic === "crop" ? "sel" : ""}" data-pic="crop"
+      x="${x0}" y="${y0}" width="${x1 - x0}" height="${y1 - y0}" stroke="${css("--accent")}"><title>${esc(t("crop_title"))}</title></rect>`)(p.page.crop || p.crop) : "";
+  const regions = tables + pics;
   stage.innerHTML = `<img src="/img/${p.pdf}.jpg?w=1400" alt="" draggable="false"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${regions}${crop}${rects}</svg>`;
   const svg = $("svg", stage);
   const pt = e => {
@@ -449,6 +480,14 @@ function renderStage() {
       const row = +hit.dataset.row;
       if (e.shiftKey || e.ctrlKey || e.metaKey) S.sel = S.sel.includes(row) ? S.sel.filter(r => r !== row) : [...S.sel, row];
       else S.sel = [row];
+      S.pic = null;
+      renderStageSel(); renderInsp();
+      return;
+    }
+    const pic = drawing ? null : e.target.closest("rect.pic");
+    if (pic) {
+      S.pic = pic.dataset.pic === "crop" ? "crop" : +pic.dataset.pic;
+      S.sel = [];
       renderStageSel(); renderInsp();
       return;
     }
@@ -479,9 +518,10 @@ function renderStage() {
         save({page: {figures}, lines: Object.fromEntries(inside.map(l => [l.row, {r: "figure"}]))});
         return;
       }
-      if (bx1 - bx0 < 5 && by1 - by0 < 5) { if (!b.add) { S.sel = []; renderStageSel(); renderInsp(); } return; }
+      if (bx1 - bx0 < 5 && by1 - by0 < 5) { if (!b.add) { S.sel = []; S.pic = null; renderStageSel(); renderInsp(); } return; }
       const rows = p.lines.filter(l => l.bbox[0] < bx1 && l.bbox[2] > bx0 && l.bbox[1] < by1 && l.bbox[3] > by0).map(l => l.row);
       S.sel = b.add ? [...new Set([...S.sel, ...rows])] : rows;
+      S.pic = null;
       renderStageSel(); renderInsp();
     };
     window.addEventListener("mousemove", move);
@@ -491,6 +531,7 @@ function renderStage() {
 
 function renderStageSel() {
   $$("#stage rect.ln").forEach(r => r.classList.toggle("sel", S.sel.includes(+r.dataset.row)));
+  $$("#stage rect.pic").forEach(r => r.classList.toggle("sel", String(S.pic) === r.dataset.pic));
   $$("#insp .lrow").forEach(r => r.classList.toggle("sel", S.sel.includes(+r.dataset.row)));
 }
 
@@ -529,7 +570,11 @@ function renderInsp() {
       : `<div class="block warn"><p>${esc(p.left.kept != null ? t("left_hint", {n: num(p.left.number), kept: num(p.left.kept)}) : t("left_hint0"))}</p>
          <button type="button" class="btn small primary" id="keep">${esc(t("keep"))}</button></div>`;
   }
-  if (!sel.length) html += `<div class="block"><p class="help">${esc(t("select_line"))}</p><p class="help">${t("keys_help")}</p></div>`;
+  if (p.front && p.lines.some(l => l.why && l.why[0] === "note" && l.why[1] >= 0.5)) {
+    html += `<div class="block warn"><p>${esc(t("front_notes"))}</p><button type="button" class="btn small" id="tobook">${esc(t("to_book"))}</button></div>`;
+  }
+  if (!sel.length && S.pic != null) html += pictureDetail(p);
+  else if (!sel.length) html += `<div class="block"><p class="help">${esc(t("select_line"))}</p><p class="help">${t("keys_help")}</p></div>`;
   else {
     const headLabel = one ? `${esc(roleName(cur.r))}${one.h.length ? ` <span class="tag h">${esc(t("by_hand"))}</span>` : ""}` : esc(t("n_sel", {n: num(sel.length)}));
     html += `<div class="block"><h3>${headLabel}</h3>
@@ -620,6 +665,7 @@ function lineDetail(l) {
     <button type="button" class="btn small" id="addhead">${esc(t("add_heading"))}</button></div></div>`;
   html += `<div class="block"><h3>${esc(t("conf"))}</h3><div class="conf">
       <span class="k">${esc(t("c_role"))}</span><span><span class="dot ${level(l.doubt.role)}" style="display:inline-block;margin:0 4px"></span>${esc(t(level(l.doubt.role)))}${mod.role ? ` · ${esc(t("model_role", {r: roleName(mod.role) || mod.role, p: fmt(mod.role_p)}))}` : ""}</span>
+      ${l.why ? `<span class="k">⚑</span><span><b>${esc(whyText(l.why))}</b></span>` : ""}
       ${mod.note != null ? `<span class="k">${esc(t("p_note"))}</span><span>${fmt(mod.note)}</span>` : ""}
       ${mod.heading != null ? `<span class="k">${esc(t("p_head"))}</span><span>${fmt(mod.heading)}</span>` : ""}
       ${mod.start != null && ["note", "endnote"].includes(l.d.r) ? `<span class="k">${esc(t("p_start"))}</span><span>${fmt(mod.start)}</span>` : ""}
@@ -643,6 +689,32 @@ function picturesBlock(p) {
       <span class="muted mono">${b.map(v => num(v)).join(" ")}</span><button type="button" class="btn small ghost" data-unpic="${i}">${esc(t("remove"))}</button></div>`).join("")}
     ${tables.map((r, i) => `<div class="row"><span class="tag" style="border-inline-start:4px solid ${roleColor("table")}">${esc(t("table_n", {n: num(i + 1)}))}</span></div>`).join("")}
   </div>`;
+}
+
+function pictureDetail(p) {
+  if (S.pic === "crop") {
+    const b = (p.page.crop || p.crop || []).map(Math.round);
+    return `<div class="block sel"><h3>${esc(t("crop_title"))}</h3>
+      <p class="muted mono">${b.map(v => num(v)).join(" ")}</p>
+      <div class="row"><button type="button" class="btn small" id="recrop">${esc(t("crop_again"))}</button>
+      ${p.page.crop ? `<button type="button" class="btn small ghost" id="uncrop">${esc(t("crop_reset"))} <kbd>Delete</kbd></button>` : ""}</div></div>`;
+  }
+  const b = pictureBoxes(p)[S.pic];
+  if (!b) { S.pic = null; return ""; }
+  return `<div class="block sel"><h3><span class="tag" style="border-inline-start:4px solid ${roleColor("figure")}">${esc(t("picture_n", {n: num(S.pic + 1)}))}</span></h3>
+    <p class="muted mono">${b.map(v => num(v)).join(" ")}</p>
+    <div class="row"><button type="button" class="btn small ghost" data-unpic="${S.pic}">${esc(t("remove"))} <kbd>Delete</kbd></button></div>
+    <p class="help">${esc(t("picture_redraw"))}</p></div>`;
+}
+
+function removePicture(i) {
+  const boxes = pictureBoxes(S.page);
+  const [x0, y0, x1, y1] = boxes[i];
+  const figures = boxes.filter((_, k) => k !== i);
+  const inside = S.page.lines.filter(l => l.d.r === "figure" && (l.bbox[0] + l.bbox[2]) / 2 >= x0 && (l.bbox[0] + l.bbox[2]) / 2 <= x1
+                                         && (l.bbox[1] + l.bbox[3]) / 2 >= y0 && (l.bbox[1] + l.bbox[3]) / 2 <= y1);
+  S.pic = null;
+  save({page: {figures}, lines: Object.fromEntries(inside.map(l => [l.row, {r: "body"}]))});  // its text is text again
 }
 
 function notesBlock(p) {
@@ -692,6 +764,8 @@ function bindInsp(el, sel, one) {
   if (tr) tr.onclick = () => save({lines: {[one.row]: {x: null}}});
   $$("[data-w]", el).forEach(w => w.onclick = () => addMarker(one, +w.dataset.w));
   $$("[data-unmark]", el).forEach(b => b.onclick = () => removeMarker(one, +b.dataset.unmark));
+  const tb = $("#tobook", el);
+  if (tb) tb.onclick = () => { S.tab = "book"; renderTop(); renderSide(); };
   const kp = $("#keep", el);
   if (kp) kp.onclick = () => save({page: {keep: true}});
   const uk = $("#unkeep", el);
@@ -743,14 +817,11 @@ function bindInsp(el, sel, one) {
     const rect = $(`rect.ln[data-row="${row}"]`);
     if (rect) rect.scrollIntoView({block: "nearest", behavior: "smooth"});
   });
-  $$("[data-unpic]", el).forEach(b => b.onclick = () => {
-    const boxes = pictureBoxes(S.page);
-    const [x0, y0, x1, y1] = boxes[+b.dataset.unpic];
-    const figures = boxes.filter((_, i) => i !== +b.dataset.unpic);
-    const inside = S.page.lines.filter(l => l.d.r === "figure" && (l.bbox[0] + l.bbox[2]) / 2 >= x0 && (l.bbox[0] + l.bbox[2]) / 2 <= x1
-                                           && (l.bbox[1] + l.bbox[3]) / 2 >= y0 && (l.bbox[1] + l.bbox[3]) / 2 <= y1);
-    save({page: {figures}, lines: Object.fromEntries(inside.map(l => [l.row, {r: "body"}]))});  // its text is text again
-  });
+  $$("[data-unpic]", el).forEach(b => b.onclick = () => removePicture(+b.dataset.unpic));
+  const recrop = $("#recrop", el);
+  if (recrop) recrop.onclick = () => { S.pic = null; S.tool = "crop"; renderPage(); toast(t("crop_hint")); };
+  const uncrop = $("#uncrop", el);
+  if (uncrop) uncrop.onclick = () => { S.pic = null; save({page: {crop: null}}); };
   const addtoc = $("#addtoc", el);
   if (addtoc) addtoc.onclick = () => { S.page.toc = [...(S.page.toc || []), {t: "", pg: "", l: 1}]; renderInsp(); };
   $$("[data-deltoc]", el).forEach(b => b.onclick = () => { S.page.toc = S.page.toc.filter((_, i) => i !== +b.dataset.deltoc); renderInsp(); });
@@ -774,6 +845,7 @@ async function save(edits) {
     renderTop();
     toast(t("saved"));
     refreshLater();
+    previewLater();
   } catch (e) { toast(e.message, true); }
 }
 
@@ -861,16 +933,69 @@ function removeMarker(l, i) {
 function reloadPreview(force) {
   const det = $("#preview");
   const iframe = $("#pv");
-  if (!S.page || !S.page.href) { det.hidden = true; return; }
+  if (!S.page) { det.hidden = true; return; }
   det.hidden = false;
+  $("#pvnone").hidden = !!S.page.href;
+  iframe.hidden = !S.page.href;
+  if (!S.page.href) { $("#pvnone").textContent = t("pv_none"); return; }
   const src = "/epub/" + S.page.href.split("#")[0].split("/").map(encodeURIComponent).join("/") + "#" + (S.page.href.split("#")[1] || "");
   if (!det.open) { iframe.dataset.want = src; return; }
   if (force || iframe.dataset.src !== src) {
+    const sameFile = !force && (iframe.dataset.src || "").split("#")[0] === src.split("#")[0];
     iframe.dataset.src = src;
     iframe.src = force ? src.replace("#", `?t=${Date.now()}#`) : src;
-  }
+    if (sameFile) setTimeout(markPreview, 50);  // only the anchor changed: the file is not loaded again
+  } else markPreview();
 }
-$("#preview").addEventListener("toggle", () => reloadPreview(false));
+
+// The page's own content in the preview: from where it begins (the panel's copy of the EPUB has an anchor there,
+// `pdf-N`; a page that begins its file, from the file's start: the chapter's title) to where the next page begins,
+// and its footnotes at the chapter's end. Browsers without CSS highlights only scroll there.
+function markPreview() {
+  const f = $("#pv");
+  let d, w;
+  try { d = f.contentDocument; w = f.contentWindow; } catch (e) { return; }
+  if (!d || !d.body || !S.page) return;
+  const a = d.getElementById("pdf-" + S.page.pdf);
+  if (!a) return;
+  const all = Array.from(d.querySelectorAll('[id^="pdf-"]'));
+  const next = all[all.indexOf(a) + 1];
+  const r = d.createRange();
+  if (S.page.top) r.setStart(d.body, 0); else r.setStartAfter(a);
+  if (next) r.setEndBefore(next); else r.setEnd(d.body, d.body.childNodes.length);
+  const ranges = [r];
+  for (const n of S.page.notes || []) {
+    const el = d.getElementById(n.id);
+    if (el) { const nr = d.createRange(); nr.selectNodeContents(el); ranges.push(nr); }
+  }
+  if (w.CSS && w.CSS.highlights && w.Highlight) {
+    w.CSS.highlights.set("pv-page", new w.Highlight(...ranges));
+    if (!d.getElementById("pv-style")) {
+      const st = d.createElementNS("http://www.w3.org/1999/xhtml", "style");
+      st.id = "pv-style";
+      st.textContent = "::highlight(pv-page) { background-color: rgba(255, 196, 0, 0.25); }";
+      (d.head || d.documentElement).appendChild(st);
+    }
+  }
+  if (S.page.top) w.scrollTo(0, 0); else a.scrollIntoView({block: "start"});
+}
+$("#pv").addEventListener("load", markPreview);
+
+// With the preview open, a change shows there by itself: the book is rebuilt once the edits pause.
+let previewTimer = null;
+function previewLater() {
+  clearTimeout(previewTimer);
+  const det = $("#preview");
+  if (!S.book || !S.book.dirty || !det.open || det.hidden) return;
+  previewTimer = setTimeout(() => rebuild(true), 1200);
+}
+
+function previewLabel() {
+  const b = S.book;
+  const state = S.busy || (b && b.building) ? t("preview_building") : b && b.dirty ? t("preview_old") : "";
+  $("#previewsum").textContent = t("preview") + (state ? " · " + state : "");
+}
+$("#preview").addEventListener("toggle", () => { reloadPreview(false); previewLater(); });
 
 // --- keys ------------------------------------------------------------------------------------------------------------
 
@@ -897,7 +1022,13 @@ document.addEventListener("keydown", e => {
     if (pages[k] != null) openPage(pages[k]);
     return;
   }
-  if (e.key === "Escape") { S.sel = []; S.tool = "select"; renderPage(); return; }
+  if (e.key === "Escape") { S.sel = []; S.pic = null; S.tool = "select"; renderPage(); return; }
+  if ((e.key === "Delete" || e.key === "Backspace") && S.pic != null && !S.sel.length) {
+    e.preventDefault();
+    if (S.pic === "crop") { if (S.page.page.crop) { S.pic = null; save({page: {crop: null}}); } }
+    else removePicture(S.pic);
+    return;
+  }
   if (e.key === "Enter") { const tx = $("#ltext"); if (tx) { e.preventDefault(); tx.focus(); tx.select(); } return; }
   if (e.key === "n" || e.key === "N") {
     e.preventDefault();

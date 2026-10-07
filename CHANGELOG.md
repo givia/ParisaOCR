@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.7.2 (2026-10-07)
+
+- **Footnote markers of two or three digits are read again, each on its own.**
+  The line reader loses digits of small raised markers ("۱۰" for "۱۰۵"),
+  mostly the thin ۱ and the dot-like ۰. Each raised mark where the line has no
+  number of the page's footnotes is now cropped to its own height (so its
+  digits are scaled up) and read with digits only. A number that is one of the
+  page's footnotes, and not a marker the line reader read elsewhere on the
+  page, then stands for the marker: it replaces a number misread there, and
+  where nothing was read it links that footnote if it is free, else it is
+  taken as before as a marker of unknown number; it never adds digits to the
+  text (a vowel sign taken for a mark stays invisible). On the 23 books we
+  score, footnotes linked after the right word went from 209 to 217 (from 199
+  to 207 with the rules alone), and no book did worse; on 5,652 markers
+  labelled by Gemini, the footnote is linked on the marker's own line 50.1% of
+  the time instead of 48.5% (two- and three-digit markers: 56.2% instead of
+  53.0%). The readings are kept next to the OCR (`markernum.json`): the first
+  conversion of a book with many footnotes takes up to about 20 s longer on a
+  CPU, seconds on a GPU.
+- Fixed: the first words of a bibliography entry could carry an invisible
+  character the converter uses for a footnote marker of unknown number into
+  the EPUB, where some readers show it as a box.
+- **Rebuilds in the review panel take seconds instead of a minute or two.**
+  Corrections are applied after the steps that read the page images and run
+  the line-role models, so those results are kept in memory and a rebuild
+  redoes only what an edit changed. Rebuild times on the 24 books we test
+  went from 22–160 s to 0.6–4.7 s (babi 127 → 4 s), with the same EPUB,
+  report and panel, compared file by file on every book. A first conversion
+  is about 40% faster too: each page image is read twice instead of three
+  times, the role model runs once instead of twice, and contents titles are
+  compared without the full comparison where their lengths already rule a
+  match out.
+- **The panel's EPUB preview shows the page itself.** It used to scroll to the
+  page's printed page number, so pages without one (front matter, pages kept
+  without a number) showed another page, and a chapter's first page started
+  below its title. The panel now writes its own copy of the EPUB with an
+  invisible anchor where each PDF page's content begins, and marks the page's
+  text and its footnotes in the preview. The EPUB itself is unchanged. A page
+  with no text of its own in the EPUB (a printed contents page, a blank page)
+  says so. With the preview open, an edit shows there by itself after a pause
+  of about a second, without pressing Rebuild.
+- A picture's box on the page can be selected in the panel (a click inside it,
+  off the lines): the side panel then shows it with Remove, and the Delete key
+  removes it. A figure page's crop box is selected the same way (Crop again,
+  Whole page). A picture drawn by hand shows on the page at once, not only
+  after a rebuild.
+- The review panel brings forward the lines where the footnote or heading
+  model is sure and the converter decided otherwise, with the model's reading
+  shown on the line and in the issue list. Measured on the 23 books we score:
+  when the footnote model gives 0.8 or more to a line not taken as a footnote,
+  Gemini's labels agree with the model 96.6% of the time (99% from 0.9). Such
+  lines are marked unsure and come first: footnotes that went into the text.
+  The models' other sure disagreements are right about three times in four and
+  are marked "check". On pages a language model labelled, its label stands.
+- On a page before the book's first chapter, whose footnotes are not read, the
+  panel says so and how to fix it: mark where that part of the book begins as a
+  chapter.
+
 ## 0.7.1 (2026-10-06)
 
 - Fixed: a book could stop converting with `ValueError: invalid literal for

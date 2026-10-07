@@ -183,7 +183,7 @@ and how sure it is. You can change:
 - a misread line's text; a line the OCR missed, of any role; a line the OCR
   read as one with another (split it at the cursor);
 - a contents page's entries, the page's type and printed number, figure pages
-  (crop, rotation), the pictures on a page (draw or remove), tables as images
+  (crop, rotation), the pictures on a page (select, draw or remove), tables as images
   or HTML;
 - the parts and chapters, the book's details and its cover.
 
@@ -196,7 +196,9 @@ on a scale where 0.5 is chance), the OCR's weakest word on a line only
 roughly (0.74). Changes are saved as you make them in `out/book.review.json`
 (chapters in `out/book.marks.json`). They can be undone, are found again if
 the book is OCR'd anew, and are used by every later conversion. *Rebuild*
-takes seconds. The panel is in Persian and English, and the app shows it in
+takes seconds. Under the page image, the page as it reads in the EPUB is
+shown with its own text and footnotes marked; while it is open, a change
+shows there by itself after a moment. The panel is in Persian and English, and the app shows it in
 its "Review and fix" tab.
 
 This is experimental: it was developed on 23 books (novels, a poetry

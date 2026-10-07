@@ -9,6 +9,12 @@ The doubt of a line, from 0 (sure) to 1 (unsure), has two sides, shown apart:
   Where the models disagree with the decision taken (a labeller's or the rules'), the line is in doubt as well.
 - its text: from the OCR's weakest word on the line. Measured on 750 hand-checked lines: it finds the misread lines
   only roughly (AUROC 0.74; the least sure 10% of lines hold 41% of them), better than the line's average.
+- where the footnote or the heading model is sure and the decision taken says otherwise (`disagreement`): measured
+  on the 23 dev books against Gemini's labels (2026-10-06), a footnote model sure of a footnote (0.8 or more) on a line
+  not taken as a note is right 96.6% of the time (99.2% from 0.9): such a line is unsure; the model sure that a line
+  taken as a note is not one is right 74% of the time, the heading model sure of a heading not taken 73%: those are to
+  check; the heading model sure that a heading is none, 78% (92% under 0.05). Pages a language model labelled are left
+  out: there the decision is its label, which the models are measured against.
 A line a person set by hand is sure on the side they set. "check" from 0.2, "unsure" from 0.5.
 """
 import re
@@ -29,11 +35,40 @@ def _edge(p):
     return 1 - abs(2 * float(p) - 1)
 
 
-def role_doubt(model, role):
-    """Doubt about a line's ROLE given the models' view MODEL (`Line.model`), or None without models."""
+SURE = 0.8  # how sure a model must be against the decision taken to be worth a look
+# (what, it says the line is one) -> doubt at SURE and at certainty, from how often it was right (module docstring)
+AGAINST = {("note", True): (0.5, 1.0), ("note", False): (0.3, 0.45),
+           ("heading", True): (0.3, 0.45), ("heading", False): (0.3, 0.6)}
+
+
+def disagreement(model, role):
+    """Where the footnote or the heading model is sure (SURE) and the decision ROLE says otherwise: (what, the model's
+    probability, the doubt), what being "note" or "heading"; else None."""
+    if not model:
+        return None
+    found = []
+    for what, taken in (("note", role == "note"), ("heading", role == "heading")):
+        p = model.get(what)
+        if p is None or (what == "note" and role == "endnote"):
+            continue  # (an endnote reads like a footnote: no disagreement there)
+        says = p >= SURE if not taken else p <= 1 - SURE
+        if not says:
+            continue
+        low, high = AGAINST[(what, not taken)]
+        sureness = min(1.0, (abs(p - 0.5) - (SURE - 0.5)) / (0.95 - SURE))
+        found.append((what, round(float(p), 3), round(low + (high - low) * sureness, 3)))
+    return max(found, key=lambda x: x[2]) if found else None
+
+
+def role_doubt(model, role, labelled=False):
+    """Doubt about a line's ROLE given the models' view MODEL (`Line.model`), or None without models. LABELLED: a
+    language model labelled the page (its label is the decision: the models' disagreements count for less)."""
     if not model:
         return None
     parts = []
+    why = None if labelled else disagreement(model, role)
+    if why is not None:
+        parts.append(why[2])
     if "note" in model:
         parts.append(_edge(model["note"]))
     if "heading" in model:
@@ -78,7 +113,8 @@ def find(panel):
             if ln["doubt"]["role"] is not None and ln["doubt"]["role"] >= 0.2:
                 out.append({"id": f"role:{pdf}:{ln['row']}", "kind": "role", "pdf": pdf, "row": ln["row"],
                             "doubt": ln["doubt"]["role"], "text": ln["text"][:80],
-                            "detail": {"role": ln["d"]["r"], "model": (ln.get("model") or {}).get("role")}})
+                            "detail": {"role": ln["d"]["r"], "model": (ln.get("model") or {}).get("role"),
+                                       "why": ln.get("why")}})
             if ln["doubt"]["text"] >= 0.3 and ln["d"]["r"] not in ("noise", "figure", "table"):
                 out.append({"id": f"text:{pdf}:{ln['row']}", "kind": "text", "pdf": pdf, "row": ln["row"],
                             "doubt": ln["doubt"]["text"], "text": ln["text"][:80], "detail": {"weak": ln["weak"]}})

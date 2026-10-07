@@ -271,6 +271,15 @@ def test_doubts():
     doubt, weak = issues.text_doubt([{"conf": 99.0}, {"conf": 72.0}], 90.0)
     assert weak == 72.0 and doubt == 1.0
     assert issues.level(0.6) == "unsure" and issues.level(0.3) == "check" and issues.level(0.05) == "sure"
+    # a sure footnote model against the decision: a footnote taken as text (or as front matter's "other") is unsure,
+    # a note it reads as none is to check; an endnote is no disagreement; on a labelled page the label is the decision
+    sure_note = {"role": "body", "role_p": 0.999, "note": 0.97, "heading": 0.01}
+    assert issues.disagreement(sure_note, "other") == ("note", 0.97, 1.0)
+    assert issues.level(issues.role_doubt(sure_note, "body")) == "unsure"
+    assert issues.role_doubt(sure_note, "body", labelled=True) < 0.2
+    assert issues.disagreement(sure_note, "endnote") is None and issues.disagreement(sure_note, "note") is None
+    assert issues.level(issues.disagreement({"note": 0.05, "heading": 0.01}, "note")[2]) == "check"
+    assert issues.disagreement({"note": 0.5, "heading": 0.5}, "body") is None
 
 
 def test_panel_server(book, tmp_path):
@@ -298,10 +307,13 @@ def test_panel_server(book, tmp_path):
         iss = json.loads(get("/api/issues")[1])
         assert iss == sorted(iss, key=lambda x: (x["ignored"], -x["doubt"], x["pdf"] or 0, x.get("row", -1)))
         p = json.loads(get("/api/page/4")[1])
-        assert p["notes"] and p["notes"][0]["how"] == "marker" and p["href"].endswith("#page-4")
+        assert p["notes"] and p["notes"][0]["how"] == "marker" and p["href"].endswith("#pdf-4")
         assert all({"row", "bbox", "text", "d", "doubt", "words"} <= set(ln) for ln in p["lines"])
         assert get("/img/4.jpg")[0] == "image/jpeg"
-        assert get("/epub/" + p["href"].split("#")[0])[0].startswith("application/xhtml+xml")
+        kind, chapter = get("/epub/" + p["href"].split("#")[0])
+        assert kind.startswith("application/xhtml+xml") and b'id="pdf-4"' in chapter  # the panel's copy of the EPUB
+        with zipfile.ZipFile(panel.res["epub"]) as z:  # the book's own EPUB has no anchors for the panel
+            assert not any(b'id="pdf-' in z.read(n) for n in z.namelist() if n.endswith(".xhtml"))
         body = [ln for ln in p["lines"] if ln["d"]["r"] == "body"]
         r = post("/api/page/4", {"lines": {str(body[0]["row"]): {"r": "verse"}}})
         assert r["page"]["reviewed"] and next(ln for ln in r["page"]["lines"] if ln["row"] == body[0]["row"])["d"]["r"] == "verse"

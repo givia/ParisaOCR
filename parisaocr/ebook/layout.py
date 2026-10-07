@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from PIL import Image
 
-from . import labels, roles
+from . import imagecache, labels, roles
 from .. import progress
 from .source import Line
 from .textutil import DIGITS, ascii_digits, is_digits
@@ -65,8 +65,43 @@ class Layout:
 
 
 def ink_mask(page):
-    with Image.open(page.image) as im:
-        return np.asarray(im.convert("L")) < 128
+    return imagecache.ink(page.image)
+
+
+def good_lines(page):
+    """(lines, good) of a page as `analyze` takes them: the lines without specks, top to bottom, and those read
+    with confidence."""
+    lines = sorted((l for l in page.lines if not _is_noise(l)), key=lambda l: (l.y0, -l.x1))
+    return lines, [l for l in lines if l.conf >= GOOD_CONF and len(l.text) >= 2]
+
+
+def page_ink(page, good, ink=None):
+    """(hr, vr, dense) of a page: the rules outside its GOOD lines (`find_rules`) and its 8x8 ink blocks without
+    them. Kept by image and line boxes (`imagecache`); INK: the page's `imagecache.Ink`, or None to read it."""
+    ink = ink or imagecache.Ink(page.image)
+
+    def compute():
+        mask = ink.array
+        hr, vr = find_rules(mask, good) if good else ([], [])
+        m = mask.copy()
+        for y, s, e, t in hr:
+            m[max(0, y - t - 2):y + t + 3, s:e] = False
+        for x, s, e, t in vr:
+            m[s:e, max(0, x - t - 2):x + t + 3] = False
+        dense = _dense_blocks(m)
+        dense.flags.writeable = False
+        return hr, vr, dense
+    return imagecache.get("page_ink", (ink.key, tuple(tuple(l.bbox) for l in good)), compute)
+
+
+def _ink_box(page):
+    """(y0, y1, x0, x1) of all the 8x8 ink blocks of a page, in blocks (a figure page's crop); kept."""
+    ink = imagecache.Ink(page.image)
+
+    def compute():
+        ys, xs = np.nonzero(_dense_blocks(ink.array))
+        return int(ys.min()), int(ys.max()), int(xs.min()), int(xs.max())
+    return imagecache.get("ink_box", ink.key, compute)
 
 
 def _runs(bool_rows, min_len):
@@ -206,19 +241,10 @@ def analyze(page, header_like=lambda text: False, top_zone=0.1, foot_zone=0.88):
     and a page number at the foot may end; they depend on the scan's margins (see `analyze_all`)."""
     L = Layout(page)
     H, W = page.height, page.width
-    lines = sorted((l for l in page.lines if not _is_noise(l)), key=lambda l: (l.y0, -l.x1))
-    good = [l for l in lines if l.conf >= GOOD_CONF and len(l.text) >= 2]
+    lines, good = good_lines(page)
     L.quality = sum(l.conf for l in good) / max(1, sum(len(l.text) > 0 for l in page.lines)) / 100 * min(1.0, len(good) / 10)
-    mask = ink_mask(page)
-    hr, vr = find_rules(mask, good) if good else ([], [])
-
-    # Ink that no confidently read line or rule accounts for: pictures, maps, calligraphy, torn scans.
-    m = mask.copy()
-    for y, s, e, t in hr:
-        m[max(0, y - t - 2):y + t + 3, s:e] = False
-    for x, s, e, t in vr:
-        m[s:e, max(0, x - t - 2):x + t + 3] = False
-    dense = _dense_blocks(m)
+    # Ink that no confidently read line or rule accounts for (`page_ink`): pictures, maps, calligraphy, torn scans.
+    hr, vr, dense = page_ink(page, good)
     covered = np.zeros_like(dense)
     for l in good:
         covered[l.y0 // 8:l.y1 // 8 + 1, l.x0 // 8:l.x1 // 8 + 1] = True
@@ -236,9 +262,8 @@ def analyze(page, header_like=lambda text: False, top_zone=0.1, foot_zone=0.88):
         # opening under an illustration); then the picture is a region of a text page.
         if not good or len(good) < 5 or ((y1 - y0) * (x1 - x0) > 0.35 * H * W and len(beside) < 5):
             L.kind = "figure"
-            ys, xs = np.nonzero(_dense_blocks(mask))
-            L.crop = (max(0, int(xs.min() * 8) - 8), max(0, int(ys.min() * 8) - 8),
-                      min(W, int(xs.max() * 8) + 16), min(H, int(ys.max() * 8) + 16))
+            ymin, ymax, xmin, xmax = _ink_box(page)
+            L.crop = (max(0, xmin * 8 - 8), max(0, ymin * 8 - 8), min(W, xmax * 8 + 16), min(H, ymax * 8 + 16))
             return L
         L.regions.append(Region("figure", box))
 
@@ -529,7 +554,11 @@ def analyze_all(pages, roles_dir=None, report=None, labels_dir=None, reviewed=No
 
 def hemistich_gap(mask, line, width):
     """x of the gap between the two halves of a verse line: a blank run near the middle of the line at
-    least three times wider than any word space. Word boxes abut each other, so this reads the ink."""
+    least three times wider than any word space. Word boxes abut each other, so this reads the ink.
+    MASK: the page's ink, or its `imagecache.Ink` (then the answer is kept)."""
+    if isinstance(mask, imagecache.Ink):
+        ink = mask
+        return imagecache.get("hemistich", (ink.key, tuple(line.bbox), width), lambda: hemistich_gap(ink.array, line, width))
     cols = mask[line.y0:line.y1, line.x0:line.x1].any(axis=0)
     if cols.size < 20:
         return None

@@ -50,6 +50,7 @@ note, and the heading level 1-3. The bundled set is `BUNDLED`. `annotate`
 attaches the predictions to the Line objects; what to do with them is the
 consumer's decision.
 """
+import hashlib
 import math
 import pathlib
 import re
@@ -58,6 +59,8 @@ from collections import Counter
 
 import numpy as np
 from PIL import Image
+
+from . import imagecache
 
 BUNDLED = pathlib.Path(__file__).resolve().parent.parent / "models" / "roles"
 
@@ -351,11 +354,12 @@ def rule_features(dark, boxes, W, H):
     return out
 
 
-def features(pages, image_of=None, names=None, text_model=None):
+def features(pages, image_of=None, names=None, text_model=None, prefetch=False):
     """The features of every line of every page: (NAMES, X float32 [n, len(NAMES)], [(page, line)] per row).
     PAGES as `source.load` gives them, IMAGE_OF(page) the page's PNG (None: page.image; a page whose image is
     gone gets -1 in the ink and rule columns). Rows come in the pages' order and, within a page, in the page's
-    line order; a page without lines gives none."""
+    line order; a page without lines gives none. PREFETCH: also work out, while each page image is read, what
+    `layout.analyze` needs from it (`layout.page_ink`, kept in `imagecache`), so that it does not read it again."""
     image_of = image_of or (lambda page: page.image)
     cols = list(names or ALL_NAMES)  # NAMES alone skips the version 2 columns (the shipped models need only those)
     want3 = any(c in TEXT3 for c in cols)
@@ -372,6 +376,9 @@ def features(pages, image_of=None, names=None, text_model=None):
             with Image.open(path) as im:
                 W, H = im.size
                 dark = np.asarray(im.convert("L")) < 128
+            if prefetch:
+                from . import layout  # (layout imports this module)
+                layout.page_ink(p, layout.good_lines(p)[1], imagecache.Ink(path, dark))
         else:
             W, H, dark = p.width, p.height, None
         rows = [{"line": l, "idx": k, "h": max(1e-6, l.y1 - l.y0), "conf": float(l.conf or 0.0)} for k, l in enumerate(p.lines)]
@@ -601,12 +608,34 @@ def annotate(pages, image_of=None, model_dir=BUNDLED, decide=True):
     predictions with the role's probability, for the review panel's confidence; with DECIDE false only that (the
     models then show their doubts on a page a labeller decides). -> lines annotated."""
     model_dir = pathlib.Path(model_dir)
+    lines = [l for p in pages for l in p.lines]
+    # the same pages, lines and models as in an earlier call of this process (the review panel's rebuild: a person's
+    # corrections are applied after the models) give the same answers, kept in `imagecache`
+    image_of = image_of or (lambda page: page.image)
+    key = hashlib.sha1(repr((decide, [(f.name, imagecache.image_key(f)) for f in sorted(model_dir.glob("*.npz"))],
+                             [(p.index, imagecache.image_key(image_of(p)), [(l.text, tuple(l.bbox), l.conf) for l in p.lines])
+                              for p in pages])).encode("utf-8")).hexdigest()
+    done = imagecache.get("annotate", key, lambda: None)
+    if done is not None:
+        for l, attrs in zip(lines, done):
+            for a, v in attrs.items():
+                setattr(l, a, dict(v) if a == "model" else v)
+        return len(done)
+    n = _annotate(pages, image_of, model_dir, decide)
+    with imagecache._lock:
+        imagecache._store[("annotate", key)] = [
+            {a: (dict(getattr(l, a)) if a == "model" else getattr(l, a))
+             for a in ["model"] + [attr for _, attr in MODELS] if getattr(l, a, None) is not None} for l in lines]
+    return n
+
+
+def _annotate(pages, image_of, model_dir, decide):
     forests = {name: Forest(model_dir / f"{name}.npz") for name, _ in MODELS if (model_dir / f"{name}.npz").exists()}
     need = set().union(*(m.names for m in forests.values())) if forests else set()
     if need & set(TEXT3):
-        names, X, index = features(pages, image_of, ALL_NAMES3, text_model=model_dir / "text.npz")
+        names, X, index = features(pages, image_of, ALL_NAMES3, text_model=model_dir / "text.npz", prefetch=True)
     else:
-        names, X, index = features(pages, image_of, NAMES if need <= set(NAMES) else ALL_NAMES)
+        names, X, index = features(pages, image_of, NAMES if need <= set(NAMES) else ALL_NAMES, prefetch=True)
     if not index:
         return 0
     for name, attr in MODELS:
@@ -623,9 +652,10 @@ def annotate(pages, image_of=None, model_dir=BUNDLED, decide=True):
             raise ValueError(f"{path} was trained on features this code does not compute: {missing}; retrain the models")
         Xm = X[:, [names.index(n) for n in m.names]]  # the model's columns, by name (version 1 models: the first 46)
         probs = None
-        if name == "role":
-            vals = [m.labels[int(c)] for c in m.predict(Xm)]
-            probs = m.proba(Xm).max(axis=1).tolist()
+        if name == "role":  # its class and how sure it is, from one run of the forest
+            proba = m.proba(Xm)
+            vals = [m.labels[int(c)] for c in np.asarray(m.classes)[proba.argmax(axis=1)]]
+            probs = proba.max(axis=1).tolist()
         elif name == "level":
             vals = [int(v) for v in m.predict(Xm)]
         else:

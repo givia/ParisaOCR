@@ -4,7 +4,7 @@ import json
 
 from PIL import Image
 
-from parisaocr.ebook import labels, notenum, source
+from parisaocr.ebook import labels, markernum, markers, notenum, source
 from parisaocr.ebook.markers import MARK
 from parisaocr.ebook.structure import _MARKER, _marker_num
 
@@ -51,6 +51,60 @@ def test_marker_linking_guards():
     found = {_marker_num(m) for m in _MARKER.finditer(labels.marked_text(l))}
     assert {3, 4} <= found  # two markers appended at the line's end are both linked
     assert labels._place_after_words("ج۷ زر الف ب", [5, 7], ["الف", "ب"]) == "ج زر الف۵ ب۷"
+
+
+def _line(text, y=100):
+    """A right-to-left line whose words sit from x=990 leftwards, 100 px each."""
+    words = [source.Word(w, (900 - 100 * i, y, 990 - 100 * i, y + 40), 95.0) for i, w in enumerate(text.split())]
+    return source.Line(text, (900 - 100 * (len(words) - 1), y, 990, y + 40), 95.0, words)
+
+
+def test_markers_read_on_their_own(monkeypatch):
+    """A raised mark read on its own (`markernum`) stands for the marker only where the line has no number of the
+    page's notes there, and only as one of them; a number the line reader read elsewhere on the page stays its own."""
+    x = 650  # over the fourth word, "خواند"
+    for text, reread, want in (
+            ("این کتاب را خواند و رفت", "۱۰۵", "این کتاب را خواند" + markers.reread_mark("۱۰۵") + " و رفت"),  # unread
+            ("این کتاب را خواند۱۰ و رفت", "۱۰۵", "این کتاب را خواند۱۰۵ و رفت"),  # a digit lost by the line reader
+            ("این کتاب را خواند ۱۰ و", "۱۰۵", "این کتاب را خواند۱۰۵ و"),  # read as a word of its own, next to the mark
+            ("این کتاب را خواند۱۰۶ و رفت", "۱۰۵", "این کتاب را خواند۱۰۶ و رفت"),  # the line's number is a note: kept
+            ("این کتاب را خواند و رفت", None, "این کتاب را خواند" + MARK + " و رفت")):  # no reading: as before
+        l = _line(text)
+        markers._insert(l, x, MARK, reread, frozenset({105, 106}))
+        assert l.text == want, (text, l.text)
+
+    class P:
+        index, width, height, image = 1, 1000, 1400, "p-001.png"
+
+    class L:
+        page = P()
+        body = [_line("واحساسی بکار می برد اصولاً شاعری نغمه", 100), _line("قطعاتی نظیرا خیلوس درمقابل محراب۴ و", 200)]
+        notes = [source.Line("۴ یادداشت", (100, 1200, 900, 1240), 95.0, [])]
+
+    marks = [(L.body[0], (510, 530, 110))]  # a tanwin over "اصولاً" taken for a raised mark
+    monkeypatch.setattr(markernum, "enabled", lambda: True)
+    monkeypatch.setattr(markernum, "read", lambda page, jobs: {k: "۴" for k, _ in jobs})
+    reads, notes = markers._reread(L, marks)
+    assert notes == {4} and reads == {}  # "۴" is read on the page already (محراب۴): the mark does not take note 4
+
+
+def test_reread_markers_link_or_vanish():
+    """A marker read on its own is one character (`markers.reread_mark`): it links the page's note of its number if
+    that one is free; otherwise it is an unread mark (the next free note, or nothing). It never shows: a vowel sign
+    taken for a mark must not become a digit in the text."""
+    from parisaocr.ebook import structure
+    asm = structure.Assembler([], {}, [])
+    asm.new_chapter("فصل", 1)
+    five, six = structure.Note("n1-5", 1, 5, "یادداشت"), structure.Note("n1-6", 1, 6, "دیگری")
+    asm.notes_by_page[1] = {5: five, 6: six}
+    r = markers.reread_mark
+    items = asm.inline("کتاب" + r("۹") + " را خواند و" + r("۶") + " رفت و" + r("۷") + " آمد", 1)
+    refs = [x.note for x in items if isinstance(x, structure.NoteRef)]
+    text = "".join(x for x in items if isinstance(x, str))
+    # ۹ is no note here: as an unread mark it takes the next one, 5; ۶ links note 6; ۷ finds no note after it and goes
+    assert refs == [five, six] and text == "کتاب را خواند و رفت و آمد"
+    # where the text is not linked (front matter, a table cell, a heading), the mark goes as MARK does
+    assert ("دیباچه" + r("۴") + " کتاب").translate(structure._UNMARK) == "دیباچه کتاب"
 
 
 def test_misread_markers_conservative():

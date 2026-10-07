@@ -26,13 +26,14 @@ number on the same page, and an unnumbered mark to the next unlinked note.
 """
 import collections
 import difflib
+import functools
 import re
 from dataclasses import dataclass, field
 
 import numpy as np
 
 from . import labels as labels_mod, marks as marks_mod
-from .markers import MARK
+from .markers import MARK, REREAD_BASE, reread_number
 from .notes import split_notes
 from .source import Line
 from .textutil import DIGITS, ascii_digits, fa_num, latin_ratio, normalize, to_int
@@ -61,6 +62,13 @@ class PageMark:
 
 
 @dataclass
+class PdfMark(PageMark):
+    """Where the content of PDF page NUMBER begins: an anchor for the review panel's preview, not a page of the book
+    (`epub` writes it only for the panel's copy). It goes beside the page's PageMark; a page without one (front
+    matter, a page kept without a number) marks the first content placed after it (`Assembler.anchor_next`)."""
+
+
+@dataclass
 class Span:
     """Left-to-right text inside a right-to-left paragraph."""
     text: str
@@ -73,6 +81,7 @@ class Block:
     ltr: bool = False
     rows: list = field(default_factory=list)  # verse: [(first, second)], poem: [items | "" (stanza break)], table: [[cell]], lines: [text]
     image: tuple = None  # figure: (layout, crop box, rotation)
+    anchors: list = field(default_factory=list)  # PDF pages whose content begins with this block (`PdfMark`)
     lead: str = ""  # bib: the author
 
 
@@ -107,13 +116,14 @@ class Book:
 # ---- helpers ----------------------------------------------------------------------------------
 
 _MARKER = re.compile(rf"(?<=[^\s{DIGITS}/\-(])([{DIGITS}]{{1,3}})(?=[\s.،؛:!?؟»«)\]\u200c]|$)"
-                     rf"|(?<=[^\s*])(\*{{1,3}})(?=[\s.،؛:!?؟»«)\]]|$)|{MARK}"
+                     rf"|(?<=[^\s*])(\*{{1,3}})(?=[\s.،؛:!?؟»«)\]]|$)|{MARK}|[{chr(REREAD_BASE + 1)}-{chr(REREAD_BASE + 999)}]"
                      # loose: a marker the OCR set apart from its word, "کرمچاله‌ها ۱،", "گردید. ۱۵۲ مدّتی"; taken only
                      # when the page has an unlinked note with that number
                      rf"|(?<=[^\s{DIGITS}])\s([{DIGITS}]{{1,3}})(?=[.،؛:!?؟»)\]]|\s*$)"
                      rf"|(?<=[.،؛:!؟»)])\s([{DIGITS}]{{1,3}})(?=\s)")
 PERSON, NOT_MARKER = labels_mod.PERSON, labels_mod.NOT_MARKER
-_UNMARK = {ord(MARK): None, ord(PERSON): None, ord(NOT_MARKER): None}  # the converter's marks, out of the text
+_UNMARK = {ord(MARK): None, ord(PERSON): None, ord(NOT_MARKER): None,  # the converter's marks, out of the text
+           **{c: None for c in range(REREAD_BASE + 1, REREAD_BASE + 1000)}}
 _LABEL_WORDS = "فصل|بخش|قسمت|گفتار|دفتر|پیوست|ضمیمه"
 _LABEL = re.compile(rf"^({_LABEL_WORDS})\s+\S+")
 _LEADERS = re.compile(r"(?:\s*[.…·])+\s*$|(?:\s*[.…·]){2,}")
@@ -143,25 +153,49 @@ def _marker_num(m):
     return len(m.group(2)) if m.group(2) else None
 
 
+# Titles are compared with every contents entry on every page: the comparisons are kept (they are pure), and a
+# threshold test first tries difflib's quick upper bounds, which rule most pairs out without the full comparison.
+@functools.lru_cache(maxsize=1 << 16)
 def _letters(s):
     return "".join(c for c in s if c.isalpha())
 
 
+@functools.lru_cache(maxsize=1 << 18)
 def _similar(a, b):
     a, b = _letters(a), _letters(b)
     return difflib.SequenceMatcher(None, a, b, autojunk=False).ratio() if a and b else 0.0
 
 
+def _at_least(a, b, t):
+    """SequenceMatcher(None, A, B).ratio() >= T for letter strings, its quick upper bounds tried first (the first,
+    from the lengths alone, before a matcher is made)."""
+    n = len(a) + len(b)
+    if n and 2.0 * min(len(a), len(b)) / n < t:  # SequenceMatcher.real_quick_ratio
+        return False
+    sm = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    return sm.quick_ratio() >= t and sm.ratio() >= t
+
+
+def _similar_at_least(a, b, t):
+    """_similar(A, B) >= T."""
+    la, lb = _letters(a), _letters(b)
+    if not (la and lb):
+        return 0.0 >= t
+    return _at_least(la, lb, t)
+
+
+@functools.lru_cache(maxsize=1 << 18)
 def _title_start(a, b):
     """One title is the other's beginning, letters compared (a long title cut short in the contents)."""
     a, b = sorted((_letters(a), _letters(b)), key=len)
-    return len(a) >= 5 and difflib.SequenceMatcher(None, a, b[:len(a)], autojunk=False).ratio() >= 0.85
+    return len(a) >= 5 and _at_least(a, b[:len(a)], 0.85)
 
 
+@functools.lru_cache(maxsize=1 << 18)
 def _same_title(a, b):
     """Titles with the same number, if any, and nearly the same letters ("فصل ۱" is not "فصل ۱۰")."""
     digits = [ascii_digits("".join(c for c in x if c in DIGITS)) for x in (a, b)]
-    return digits[0] == digits[1] and _similar(a, b) >= 0.8
+    return digits[0] == digits[1] and _similar_at_least(a, b, 0.8)
 
 
 def _centered(line, width, tol=0.08):
@@ -462,6 +496,8 @@ class Assembler:
         self.poetry = poetry  # a book of verse: its pages are verse unless set as justified prose
         self.chapters = []
         self.chapter = None
+        self.pending = []  # PDF pages whose content begins with the next content placed (`anchor_next`)
+        self.placed = set()  # PDF pages whose anchor is placed
         self.para = None  # the open paragraph Block
         self.para_lines, self.para_strong = 0, False  # its number of lines; a quote: clearly indented
         self.deferred = []  # figures waiting for the open paragraph to end
@@ -495,6 +531,7 @@ class Assembler:
 
     def add(self, block):
         self.close_para()
+        self._anchor(block)
         self.chapter.blocks.append(block)
 
     def new_chapter(self, title, page, kind="chapter", label="", heading=None):
@@ -531,7 +568,16 @@ class Assembler:
             last = self.last_linked.get(page_no, 0)
             following = next((notes[k] for k in sorted(notes) if k > last and not notes[k].linked
                               and k not in self.explicit.get(page_no, ()) and k not in claimed), None)
-            if before == PERSON:  # a marker a person placed: the note of its number, as given
+            hint = reread_number(m.group(0))
+            if hint is not None:  # a raised mark read on its own (`markers.reread_mark`): the note of its number if
+                note = notes.get(hint)  # that one is free, else as an unread mark (MARK): the next note, or nothing
+                if note is None or note.linked or hint in claimed:
+                    note = following
+                    if note is None:
+                        items.append(text[pos:m.start()])
+                        pos = m.end()
+                        continue
+            elif before == PERSON:  # a marker a person placed: the note of its number, as given
                 k = _marker_num(m)
                 note = notes.get(k)
                 if (note is None or note.linked) and k in self.unit_notes and not self.unit_notes[k].linked:
@@ -575,6 +621,28 @@ class Assembler:
             items = [Span(x) if isinstance(x, str) else x for x in items]
         return [x for x in items if x != "" and not (isinstance(x, Span) and not x.text)]
 
+    @property
+    def para(self):
+        """The open paragraph Block. One that opens takes the pending anchors (`anchor_next`)."""
+        return self._para
+
+    @para.setter
+    def para(self, block):
+        self._para = block
+        if block is not None:
+            self._anchor(block)
+
+    def anchor_next(self, pdf):
+        """PDF page PDF has no PageMark to stand beside: its anchor goes with the next content placed."""
+        self.pending.append(pdf)
+
+    def _anchor(self, block):
+        """The pending anchors on BLOCK, which begins the content of their pages."""
+        if self.pending:
+            block.anchors += self.pending
+            self.placed.update(self.pending)
+            self.pending = []
+
     def para_append(self, text, page_no, kind="p", ltr=False, strong=False):
         if self.para is None:
             self.para = Block(kind, [], ltr)
@@ -585,11 +653,16 @@ class Assembler:
                 self.para.items.append(" ")
             self.para.ltr = self.para.ltr and ltr
         if self.para.ltr and PERSON not in text:
-            self.para.items.append(text.translate(_UNMARK))  # a left-to-right paragraph needs no spans
+            new = [text.translate(_UNMARK)]  # a left-to-right paragraph needs no spans
         elif self.para.ltr:  # with a person's markers: linked, without spans
-            self.para.items += [x.text if isinstance(x, Span) else x for x in self.inline(text, page_no, True)]
+            new = [x.text if isinstance(x, Span) else x for x in self.inline(text, page_no, True)]
         else:
-            self.para.items += self.inline(text, page_no, ltr)
+            new = self.inline(text, page_no, ltr)
+        if self.pending and new:  # a page without a PageMark that goes on with the open paragraph
+            new = [PdfMark(p) for p in self.pending] + new
+            self.placed.update(self.pending)
+            self.pending = []
+        self.para.items += new
         self.para_lines += 1
 
     # -- notes --
@@ -987,7 +1060,7 @@ class Assembler:
             if any(isinstance(x, NoteRef) for x in items):  # the head carries a note marker: linked, as running text
                 self.para = Block("bib", items + [" "], ltr)
             else:
-                self.para = Block("bib", [], ltr, lead=h.text.strip())
+                self.para = Block("bib", [], ltr, lead=h.text.strip().translate(_UNMARK))  # the converter's marks out
             prev = None
             for t in sorted(owner.get(id(h), []), key=lambda l: l.y0):
                 gap = ((prev.x0 - edge_l) if rtl_text else (edge_r - prev.x1)) if prev is not None else 0
@@ -1024,10 +1097,12 @@ class Assembler:
                         cells[k] = (cells[k] + " " + l.text.translate(_UNMARK)).strip()
                     table.append(cells)
                 self.close_para()
-                caption = []
+                caption, anchors = [], []
                 while self.chapter.blocks and self.chapter.blocks[-1].kind == "caption":
-                    caption = self.chapter.blocks.pop().items + (["\n"] if caption else []) + caption
-                blk = Block("table", caption, rows=table, image=(L, r.bbox, 0))
+                    cap = self.chapter.blocks.pop()
+                    caption = cap.items + (["\n"] if caption else []) + caption
+                    anchors = cap.anchors + anchors  # a page that began with the caption begins with the table
+                blk = Block("table", caption, rows=table, image=(L, r.bbox, 0), anchors=anchors)
                 blk.mode = getattr(L, "table_mode", None)  # a person's choice for this page: "image" or "html"
                 self.add(blk)
                 self.report["tables"] += 1
@@ -1063,7 +1138,9 @@ class Assembler:
             if part:
                 self.new_chapter(starts[n]["title"], n, kind="part")
                 if isinstance(n, int) and n >= 1:  # as for text pages below: a page before the first printed
-                    self.add(Block("mark", [PageMark(n)]))  # number has none to mark, nor a page kept without one
+                    self.add(Block("mark", [PdfMark(L.page.index), PageMark(n)]))  # number has none to mark, nor a page kept without one
+                else:
+                    self.anchor_next(L.page.index)
                 if not (starts[n].get("after_h2") or starts[n].get("bylines") or starts[n].get("rest")):
                     continue  # the part's title page; one that prints more (a person's reading) goes on below
             if n in starts:
@@ -1074,6 +1151,8 @@ class Assembler:
                     self.new_chapter(s["title"], n, label=s["label"], heading=heading)
                 elif self.chapter is None:  # a titled section before the first chapter
                     self.new_chapter("", n, kind="front")
+                if not part and (s["after_h2"] or s["bylines"]):  # the page begins with its title block
+                    self.anchor_next(L.page.index)
                 for l in s["after_h2"]:
                     if labels_mod.exact(l):
                         l.text, l.markers = labels_mod.marked_text(l), []
@@ -1094,14 +1173,19 @@ class Assembler:
                 self.new_chapter("", n, kind="front")
             self.chapter.notes += notes
             # a page kept without a number (`order`: its key is a float, even a whole one) has none to mark
+            pdf = L.page.index
+            if pdf in self.pending:  # its title block placed nothing: the anchor goes beside the page's mark
+                self.pending.remove(pdf)
             if self.chapter.kind != "front" and isinstance(n, int) and n >= 1 and not part:
-                mark = PageMark(n)
+                mark = ([] if pdf in self.placed else [PdfMark(pdf)]) + [PageMark(n)]
                 if self.para is not None and self.para.kind == "poem":
-                    self.para.rows.append([mark])
+                    self.para.rows.append(mark)
                 elif self.para is not None:
-                    self.para.items.append(mark)
+                    self.para.items += mark
                 else:
-                    self.add(Block("mark", [mark]))
+                    self.add(Block("mark", mark))
+            elif not part and pdf not in self.placed:
+                self.anchor_next(pdf)
             if L.kind == "figure":
                 for l in L.page.lines:
                     _decide(l, "figure")
@@ -1348,10 +1432,24 @@ def _learned_title_block(L):
     return [], title, [l for l in head if l not in title], body[k:]
 
 
-def _title_at(L, title, depth=4):
+_TITLE_AT = {}  # (title, the texts it was looked for in) -> `_title_at`: kept for the review panel's rebuilds
+
+
+def _title_at(L, title, depth=4, sure=None):
     """Index of the line among the page's first sure lines that carries TITLE (alone or joined with the next
-    line), or None."""
-    sure = _sure_lines(L)[:depth]
+    line), or None. SURE: the page's `_sure_lines`, when the caller has them. The answer depends only on the
+    texts of those lines, and is kept: a rebuild finds the same answers for every page a person did not change."""
+    sure = (_sure_lines(L) if sure is None else sure)[:depth]
+    key = (title, tuple(l.text for l in sure))
+    found = _TITLE_AT.get(key, _TITLE_AT)
+    if found is _TITLE_AT:
+        if len(_TITLE_AT) > 1_000_000:
+            _TITLE_AT.clear()
+        found = _TITLE_AT[key] = _find_title(sure, title)
+    return found
+
+
+def _find_title(sure, title):
     bare_label = re.fullmatch(rf"({_LABEL_WORDS})\s+\S+", title.strip())
     for i, l in enumerate(sure):
         if bare_label:  # "فصل هشتم" must not match "فصل هفتم": the label and its number word exactly
@@ -1359,7 +1457,7 @@ def _title_at(L, title, depth=4):
                 return i
             continue
         texts = [l.text] + ([l.text + " " + sure[i + 1].text] if i + 1 < len(sure) else [])
-        if any(_similar(t, title) >= 0.8 or _title_start(t, title) or _same_title(t, title) for t in texts):
+        if any(_similar_at_least(t, title, 0.8) or _title_start(t, title) or _same_title(t, title) for t in texts):
             return i
     return None
 
@@ -1371,6 +1469,7 @@ def _align_contents(pages, contents):
     did not tell apart) counts at the run's first page."""
     by_n = {n: L for L, n in pages if L.kind == "text" and L.body}
     order = sorted(by_n)
+    sure = {n: _sure_lines(L) for n, L in by_n.items()}  # each page's, once: every entry looks at every page
     cands = []
     for i, e in enumerate(contents):
         if not e.title and e.page in by_n:
@@ -1379,9 +1478,9 @@ def _align_contents(pages, contents):
         if len(_letters(e.title)) < 3:
             cands.append([])
             continue
-        hits = [n for n in order if _title_at(by_n[n], e.title) is not None]
+        hits = [n for n in order if _title_at(by_n[n], e.title, sure=sure[n]) is not None]
         runs = [n for k, n in enumerate(hits) if k == 0 or order.index(n) - order.index(hits[k - 1]) > 1]
-        if e.page is not None and e.page in by_n and e.page not in runs and _title_at(by_n[e.page], e.title, 8) is not None:
+        if e.page is not None and e.page in by_n and e.page not in runs and _title_at(by_n[e.page], e.title, 8, sure[e.page]) is not None:
             runs.append(e.page)
         cands.append(sorted(set(runs)))
     # longest chain of entries with non-decreasing pages; ties: closer to the printed page numbers

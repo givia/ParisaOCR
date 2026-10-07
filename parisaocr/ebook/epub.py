@@ -20,8 +20,8 @@ import zipfile
 
 from PIL import Image, ImageDraw
 
-from . import fonts
-from .structure import NoteRef, PageMark, Span
+from . import fonts, imagecache
+from .structure import NoteRef, PageMark, PdfMark, Span
 from .textutil import fa_num
 
 def font_css(families):
@@ -97,9 +97,34 @@ def attr(s):
     return html.escape(s, quote=True)
 
 
+def _encode(page, box, rotate):
+    """(media type, extension, bytes) of a picture of PAGE: the stamps burned into the scan painted out, BOX of it,
+    turned ROTATE degrees; a black-and-white scan as PNG, others as JPEG."""
+    with Image.open(page.image) as im:
+        im.load()
+        for x0, y0, x1, y1 in page.stamps:  # a site's name burned into the scan
+            white = 255 if im.mode in ("1", "L") else (255, 255, 255)
+            ImageDraw.Draw(im).rectangle((x0 - 2, y0 - 2, x1 + 2, y1 + 2), fill=white)
+        if box:
+            x0, y0, x1, y1 = box
+            im = im.crop((max(0, x0), max(0, y0), min(im.width, x1), min(im.height, y1)))
+        if rotate:
+            im = im.rotate(rotate, expand=True, fillcolor=255 if im.mode in ("1", "L") else (255, 255, 255))
+        if im.mode == "1":
+            kind, ext, fmt, opts = "image/png", "png", "PNG", {"optimize": True}
+        else:
+            im = im.convert("L" if im.mode in ("L", "LA", "I") else "RGB")
+            kind, ext, fmt, opts = "image/jpeg", "jpg", "JPEG", {"quality": 82, "optimize": True}
+        with tempfile.SpooledTemporaryFile() as f:
+            im.save(f, fmt, **opts)
+            f.seek(0)
+            return kind, ext, f.read()
+
+
 class Writer:
-    def __init__(self, book, meta, tables="image"):
+    def __init__(self, book, meta, tables="image", anchors=False):
         self.book = book
+        self.anchors = anchors  # the review panel's copy: an anchor where each PDF page's content begins
         self.meta = meta
         self.lang = meta.get("language", "fa")
         self.tables = tables
@@ -110,25 +135,13 @@ class Writer:
 
     # -- images --
     def image(self, layout, box, rotate, name):
-        with Image.open(layout.page.image) as im:
-            im.load()
-            for x0, y0, x1, y1 in layout.page.stamps:  # a site's name burned into the scan
-                white = 255 if im.mode in ("1", "L") else (255, 255, 255)
-                ImageDraw.Draw(im).rectangle((x0 - 2, y0 - 2, x1 + 2, y1 + 2), fill=white)
-            if box:
-                x0, y0, x1, y1 = box
-                im = im.crop((max(0, x0), max(0, y0), min(im.width, x1), min(im.height, y1)))
-            if rotate:
-                im = im.rotate(rotate, expand=True, fillcolor=255 if im.mode in ("1", "L") else (255, 255, 255))
-            if im.mode == "1":
-                path, kind, fmt, opts = f"images/{name}.png", "image/png", "PNG", {"optimize": True}
-            else:
-                im = im.convert("L" if im.mode in ("L", "LA", "I") else "RGB")
-                path, kind, fmt, opts = f"images/{name}.jpg", "image/jpeg", "JPEG", {"quality": 82, "optimize": True}
-            with tempfile.SpooledTemporaryFile() as f:
-                im.save(f, fmt, **opts)
-                f.seek(0)
-                self.files[path] = f.read()
+        """A picture of the page (BOX of it, turned ROTATE degrees), as images/NAME.png or .jpg. Its bytes are
+        kept (`imagecache`): the review panel's copy and every rebuild take them from there."""
+        page = layout.page
+        key = (imagecache.image_key(page.image), tuple(tuple(s) for s in page.stamps), tuple(box) if box else None, rotate)
+        kind, ext, data = imagecache.get("epub_image", key, lambda: _encode(page, box, rotate))
+        path = f"images/{name}.{ext}"
+        self.files[path] = data
         self.images[path] = kind
         return path
 
@@ -147,9 +160,15 @@ class Writer:
                 k = fa_num(len(refs))
                 out.append(f'<sup><a class="noteref" epub:type="noteref" role="doc-noteref" id="r-{x.note.id}" '
                            f'href="#{x.note.id}">{k}</a></sup>')
+            elif isinstance(x, PdfMark):
+                if self.anchors:
+                    out.append(self.pdf_anchor([x.number]))
             elif isinstance(x, PageMark):
                 out.append(self.pagebreak(x.number))
         return "".join(out).strip()
+
+    def pdf_anchor(self, pdfs):
+        return "".join(f'<span id="pdf-{p}"></span>' for p in pdfs)
 
     def pagebreak(self, n):
         pid = f"page-{n}"
@@ -164,6 +183,8 @@ class Writer:
             b = bl[i]
             k = b.kind
             ltr = ' dir="ltr" lang="en"' if b.ltr else ""
+            start = len(out)  # the panel's anchors go in front of the block's own markup (`pdf_anchor`)
+            pre = self.pdf_anchor(b.anchors) if self.anchors and b.anchors and k != "quote" else ""
             if k == "p":
                 out.append(f"<p{ltr}>{self.inline(b.items, refs)}</p>")
             elif k == "quote":
@@ -171,7 +192,8 @@ class Writer:
                 while i < len(bl) and bl[i].kind == "quote":
                     q = bl[i]
                     qd = ' dir="ltr" lang="en"' if q.ltr else ""
-                    group.append(f"<p{qd}>{self.inline(q.items, refs)}</p>")
+                    anchor = self.pdf_anchor(q.anchors) if self.anchors else ""
+                    group.append(f"<p{qd}>{anchor}{self.inline(q.items, refs)}</p>")
                     i += 1
                 out.append("<blockquote>\n" + "\n".join(group) + "\n</blockquote>")
                 continue
@@ -222,6 +244,11 @@ class Writer:
                 out.append(f'<figure>\n<img src="../{src}" alt="{attr(alt)}"/>{figcap}\n</figure>')
             elif k == "lines":
                 out.append('<div class="titlepage">\n' + "\n".join(f"<p>{esc(r)}</p>" for r in b.rows) + "\n</div>")
+            if pre:
+                if len(out) > start:
+                    out[start] = pre + out[start]
+                else:
+                    out.append(pre)
             i += 1
         return out
 
@@ -450,7 +477,8 @@ def find_isbn(book):
     return None
 
 
-def write(book, out_path, meta, tables="image", font_dir=fonts.FONT_DIR):
+def write(book, out_path, meta, tables="image", font_dir=fonts.FONT_DIR, anchors=False):
+    """ANCHORS: also an anchor (id "pdf-N") where the content of each PDF page begins, for the review panel."""
     meta = dict(meta)
     meta.setdefault("isbn", find_isbn(book))
-    return Writer(book, meta, tables).write(out_path, font_dir)
+    return Writer(book, meta, tables, anchors).write(out_path, font_dir)

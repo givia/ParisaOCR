@@ -1,7 +1,8 @@
 """Second look at a page once its layout is known: stacked fractions, footnote markers, verse lines."""
 import re
 
-from .layout import hemistich_gap, ink_mask
+from . import imagecache
+from .layout import hemistich_gap
 from .markers import add_markers
 from .source import Line, Word
 from .textutil import DIGITS, is_digits
@@ -57,7 +58,7 @@ def refine(layout):
     if L.kind != "text" or not L.body:
         return 0
     join_fractions(L)
-    mask = ink_mask(L.page)
+    mask = imagecache.Ink(L.page.image)  # read only when an answer is not kept (`imagecache`)
     added = add_markers(L, mask)
     for line in L.body:
         if not line.latin and len(line.text.split()) >= 4:  # two hemistichs of two words or more
