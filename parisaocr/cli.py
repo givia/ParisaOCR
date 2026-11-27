@@ -1,7 +1,9 @@
 """Command line: `parisaocr ocr`, `parisaocr epub`, `parisaocr pages`, `parisaocr cut` and `parisaocr app`."""
 import argparse
+import collections
 import os
 import pathlib
+import re
 import shlex
 import sys
 import tempfile
@@ -156,8 +158,15 @@ def write_pdfs(opts, out, pages, log):
     progress.emit("pdf")
     pdf_inputs = [pathlib.Path(p) for p in opts.input if pathlib.Path(p).suffix.lower() == ".pdf"]
     pages_dir = (out / "pages").resolve()
-    from_pdf = [(pid, p) for pid, p in pages if pathlib.Path(p).resolve().parent == pages_dir]
-    images = [(pid, p) for pid, p in pages if (pid, p) not in from_pdf]
+    in_pages = [(pid, p) for pid, p in pages if pathlib.Path(p).resolve().parent == pages_dir]
+    from_pdf = [(pid, p) for pid, p in in_pages if pdf_inputs and re.fullmatch(r"p-\d+", pid)]
+    scans = collections.defaultdict(list)  # the frames of each multi-page TIFF (NAME-NNN), by NAME
+    for pid, p in in_pages:
+        if (pid, p) not in from_pdf:
+            scans[pid.rsplit("-", 1)[0]].append((pid, p))
+    images = [(pid, p) for pid, p in pages if (pid, p) not in in_pages]
+    if opts.merge_pdf:
+        images, scans = [(pid, p) for pid, p in pages if (pid, p) not in from_pdf], {}
 
     def lines_of(pid):
         f = out / "jsonl" / f"{pid}.jsonl"
@@ -181,6 +190,10 @@ def write_pdfs(opts, out, pages, log):
         for s, n in stamped.items():
             notes.append(f"text stamp {stamp_label(s)} removed from {n} pages")
         log(f"searchable PDF -> {dst} ({'; '.join(notes)})")
+    for name, frames in scans.items():
+        dst = out / "pdf" / f"{name}.pdf"
+        pdfout.images_to_pdf([(p, lines_of(pid)) for pid, p in frames], dst)
+        log(f"searchable PDF -> {dst} ({len(frames)} pages)")
     if images:
         if opts.merge_pdf:
             dst = out / "pdf" / (opts.merge_pdf if opts.merge_pdf.lower().endswith(".pdf") else opts.merge_pdf + ".pdf")
@@ -279,8 +292,8 @@ def parser(cls=argparse.ArgumentParser):
     o.add_argument("--pdf", choices=["auto", "extract", "render"], default="auto",
                    help="PDF pages: extract the embedded scan images, render at --dpi, or decide per file")
     o.add_argument("--dpi", type=int, default=300)
-    o.add_argument("--first", type=int, help="first PDF page")
-    o.add_argument("--last", type=int, help="last PDF page")
+    o.add_argument("--first", type=int, help="first page of a PDF or multi-page TIFF")
+    o.add_argument("--last", type=int, help="last page of a PDF or multi-page TIFF")
     engine_args(o)
     o.set_defaults(func=cmd_ocr)
 

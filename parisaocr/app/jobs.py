@@ -256,7 +256,7 @@ class Store:
                     add(f, "pdf")
             d = out / "pages"
             if d.is_dir():
-                n = sum(1 for _ in d.glob("p-*.png"))
+                n = sum(1 for _ in d.glob("*.png"))
                 if n:
                     add(d, "pages", count=n)
         return files
@@ -271,7 +271,12 @@ class Store:
             elif p.suffix.lower() in IMAGE_SUFFIXES:
                 images[p.stem] = p
         if (out / "pages").is_dir():
-            images.update({f.stem: f for f in (out / "pages").glob("p-*.png")})
+            frames = {f.stem: f for f in (out / "pages").glob("*.png")}
+            for pid in frames:  # a multi-page TIFF is shown as its pages (NAME-NNN), not as one image
+                name = pid.rsplit("-", 1)[0]
+                if name in images and images[name].suffix.lower() in (".tif", ".tiff"):
+                    del images[name]
+            images.update(frames)
         ids = set(images)
         for fmt in ("txt", "jsonl"):
             if (out / fmt).is_dir():

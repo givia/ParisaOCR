@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.3 (2026-11-27)
+
+- **Every page of a multi-page TIFF is read** (#1, reported with a patch by
+  @mahdihaghnegar). A TIFF with several frames, what a scanner writes for a
+  stack of sheets, used to be read as its first page only. Each frame is now
+  a page: `scan.tif` gives `OUT/pages/scan-001.png`, `scan-002.png`, … and
+  `scan-001.txt`, … as a PDF gives `p-001`. It works for a file named on the
+  command line, for files in a directory and for uploads in the app, with
+  several such files in one run; `--first` and `--last` pick pages as for a
+  PDF, `--format pdf` writes one searchable `OUT/pdf/scan.pdf`, and a
+  reduced-resolution copy of a page stored in the file (a thumbnail) is not
+  taken for a page. A TIFF with one page is read as before.
+
 ## 0.7.2 (2026-10-07)
 
 - **Footnote markers of two or three digits are read again, each on its own.**

@@ -1,5 +1,8 @@
 """Turn the inputs of a run (image files, directories, a PDF) into a list of (page id, image path).
 
+A TIFF that holds several pages (what a scanner writes for a stack of sheets)
+gives one page per frame: OUT/pages/NAME-NNN.png for NAME.tif.
+
 PDF pages become PNG files under OUT/pages/p-NNN.png. A scanned PDF (one big
 image per page) is extracted losslessly with pdfimages; a born-digital PDF is
 rendered with pdftoppm at --dpi. Mode "auto" picks by counting the pages that
@@ -33,6 +36,7 @@ def run_tool(cmd, **kwargs):
 
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".gif", ".webp", ".bmp", ".pnm", ".ppm", ".pgm"}
+TIFF_SUFFIXES = {".tif", ".tiff"}
 
 
 def collect(inputs, out, pdf_mode="auto", dpi=300, first=None, last=None, redo=False):
@@ -42,11 +46,13 @@ def collect(inputs, out, pdf_mode="auto", dpi=300, first=None, last=None, redo=F
     for p in inputs:
         p = pathlib.Path(p)
         if p.is_dir():
-            pages += [(f.stem, f) for f in sorted(p.iterdir()) if f.suffix.lower() in IMAGE_SUFFIXES]
+            for f in sorted(p.iterdir()):
+                if f.suffix.lower() in IMAGE_SUFFIXES:
+                    pages += image_pages(f, pathlib.Path(out) / "pages", first, last, redo)
         elif p.suffix.lower() == ".pdf":
             pages += pdf_pages(p, pathlib.Path(out) / "pages", pdf_mode, dpi, first, last, redo)
         elif p.suffix.lower() in IMAGE_SUFFIXES:
-            pages.append((p.stem, p))
+            pages += image_pages(p, pathlib.Path(out) / "pages", first, last, redo)
         else:
             print(f"parisaocr: skipping {p} (not an image, directory or PDF)", file=sys.stderr)
     seen = set()
@@ -55,6 +61,56 @@ def collect(inputs, out, pdf_mode="auto", dpi=300, first=None, last=None, redo=F
             sys.exit(f"parisaocr: two pages would be called {pid!r}; rename the inputs")
         seen.add(pid)
     return pages
+
+
+def tiff_frames(path):
+    """The frames of a TIFF that are pages, as 0-based indexes: all but reduced-resolution copies
+    (a thumbnail stored after its page). [] for a file that cannot be read."""
+    try:
+        with Image.open(path) as im:
+            frames = []
+            for i in range(getattr(im, "n_frames", 1)):
+                im.seek(i)
+                if not int(getattr(im, "tag_v2", {}).get(254, 0)) & 1:  # NewSubfileType: reduced resolution
+                    frames.append(i)
+            return frames
+    except Exception:
+        return []
+
+
+def image_pages(path, pages_dir, first=None, last=None, redo=False):
+    """The pages of one image file. A file with one page is read where it is. A TIFF with several
+    is a scan of several sheets: each frame is written to PAGES_DIR as STEM-NNN.png (kept as it is
+    stored: bilevel, grey or colour, with its resolution), FIRST to LAST as for a PDF, and reused
+    on a later run unless REDO."""
+    frames = tiff_frames(path) if path.suffix.lower() in TIFF_SUFFIXES else []
+    if len(frames) <= 1:
+        return [(path.stem, path)]
+    n = len(frames)
+    wanted = list(range(first or 1, min(last or n, n) + 1))
+    target = {p: pages_dir / f"{path.stem}-{p:03d}.png" for p in wanted}
+    todo = [p for p in wanted if redo or not target[p].exists()
+            or target[p].stat().st_mtime < path.stat().st_mtime]
+    if todo:
+        pages_dir.mkdir(parents=True, exist_ok=True)
+        with Image.open(path) as im:
+            for p in todo:
+                im.seek(frames[p - 1])
+                if im.mode.startswith("I;16"):
+                    frame = Image.fromarray((np.asarray(im) >> 8).astype(np.uint8))
+                elif im.mode in ("1", "L", "RGB"):
+                    frame = im
+                else:
+                    frame = im.convert("L" if im.mode in ("LA", "I", "F") else "RGB")
+                dpi = im.info.get("dpi")
+                part = target[p].with_suffix(".part")
+                frame.save(part, format="PNG", **({"dpi": tuple(float(v) for v in dpi)} if dpi else {}))
+                part.replace(target[p])
+        print(f"{path.name}: {len(wanted)} of {n} pages -> {pages_dir}", flush=True)
+    else:
+        print(f"{path.name}: {len(wanted)} pages already in {pages_dir}", flush=True)
+    progress.emit("pages", len(wanted), len(wanted))
+    return [(f"{path.stem}-{p:03d}", target[p]) for p in wanted]
 
 
 def pdf_page_count(pdf):

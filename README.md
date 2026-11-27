@@ -29,6 +29,7 @@ parisaocr ocr page.png                        # print the text
 parisaocr ocr scans/ --out out                # out/txt/*.txt and out/hocr/*.hocr
 parisaocr ocr book.pdf --out out --format txt,hocr,jsonl
 parisaocr ocr book.pdf --out out --first 10 --last 20
+parisaocr ocr scan.tif --out out               # every page of a multi-page TIFF: out/txt/scan-001.txt, ...
 parisaocr ocr book.pdf --out out --format pdf     # out/pdf/book.pdf: searchable
 parisaocr epub book.pdf --out out                 # out/book.epub (experimental)
 parisaocr epub book.pdf --out out --llm           # the structure decided by Gemini (API key)
